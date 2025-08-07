@@ -6,7 +6,6 @@ from .ffautils import generate_width_trials
 from .periodogram import Periodogram
 from .timing import timing
 
-
 @timing
 def ffa_search(
     tseries,

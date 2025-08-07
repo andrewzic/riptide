@@ -102,3 +102,75 @@ class Periodogram(object):
         plt.figure(figsize=figsize, dpi=dpi)
         self.plot(iwidth=iwidth)
         plt.show()
+
+
+class UV_FFA(object):
+    """
+    Stores the raw output of the FFA search of a time series.
+
+    Attributes
+    ----------
+    uv_ind : tuple (or similar)
+            Simple tuple to indicate the relevant grid cell (indexes, not sky-bsed)
+
+    periods : ndarray
+        Sequence of trial periods in seconds
+
+    foldbins : ndarray
+        Sequence with the same length as `periods`, containing the exact number of phase bins with
+        which the data were folded for each particular trial period.
+
+    snrs : ndarray
+        Two dimensional array with shape (num_periods, num_widths) containing the S/N as a function
+        of trial pulse width and period.
+    """
+
+    def __init__(self, uv_ind, periods, foldbins, base_periods, tsamps, ffa_list, metadata=None):
+        self.uv_ind = uv_ind
+        self.periods = periods
+        self.foldbins = foldbins
+        self.base_periods = base_periods
+        self.tsamps = tsamps
+        self.ffa_list = ffa_list
+        self.metadata = metadata if metadata is not None else Metadata({})
+
+    @property
+    def freqs(self):
+        """Sequence of trial frequencies in Hz, in **decreasing** order"""
+        return 1.0 / self.periods
+    
+    @property
+    def u(self):
+        return uv_inds[0]
+    
+    @property
+    def v(self):
+        return uv_inds[0]
+
+    @property
+    def tobs(self):
+        """Length in seconds of the TimeSeries that was searched"""
+        return self.metadata["tobs"]
+
+    def to_dict(self):
+        return {
+            "uv_ind": uv_ind,
+            "periods": self.periods,
+            "foldbins": self.foldbins,
+            "base_periods": self.base_periods,
+            "tsamps": self.tsamps,
+            "ffas": self.ffa_list,
+            "metadata": self.metadata,
+        }
+
+    @classmethod
+    def from_dict(cls, items):
+        return cls(
+            items["uv_ind"],
+            items["periods"],
+            items["foldbins"],
+            items["base_periods"],
+            items["tsamps"],
+            items["ffas"],
+            metadata=items["metadata"],
+        )

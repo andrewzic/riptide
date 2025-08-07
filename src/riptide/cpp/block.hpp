@@ -55,6 +55,12 @@ typedef BlockTemplate<float> Block;
 /* Wraps a const float pointer that stores a contiguous two-dimensional array */
 typedef BlockTemplate<const float> ConstBlock;
 
+/* Wraps a std::complex<float> pointer that stores a contiguous two-dimensional array */
+typedef BlockTemplate<std::complex<float>> ComplexBlock;
+
+/* Wraps a const std::complex<float> pointer that stores a contiguous two-dimensional array */
+typedef BlockTemplate<const std::complex<float>> ConstComplexBlock;
+
 } // namespace riptide
 
 #endif // BLOCK_HPP

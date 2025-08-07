@@ -200,12 +200,75 @@ std::tuple< py::array_t<double>, py::array_t<uint32_t>, py::array_t<float> > per
     auto snrs = new_cstyle_array<float>({length, num_widths});
 
     riptide::periodogram(
-        data.data(0), size, tsamp, widths.data(0), num_widths, 
-        period_min, period_max, bins_min, bins_max, 
-        periods.mutable_data(0), foldbins.mutable_data(0), snrs.mutable_data(0)
+        data.data(0), 
+        size, 
+        tsamp, 
+        widths.data(0), 
+        num_widths, 
+        period_min, 
+        period_max, 
+        bins_min, 
+        bins_max, 
+        periods.mutable_data(0), 
+        foldbins.mutable_data(0), 
+        snrs.mutable_data(0)
         );
 
     return std::make_tuple(periods, foldbins, snrs);
+}
+std::tuple<py::array_t<double>, py::array_t<uint32_t>, py::list> vis_ffa_transform(
+    py::array_t<std::complex<float>> arr_vis_data,
+    double tsamp,
+    double period_min,
+    double period_max,
+    size_t bins_min,
+    size_t bins_max)
+{
+    riptide::assert_c_contiguous(arr_vis_data);
+    riptide::assert_c_contiguous(arr_widths);
+
+    auto vis_data = arr_vis_data.unchecked<1>();
+    size_t size = vis_data.size();
+
+    auto widths = arr_widths.unchecked<1>();
+    size_t num_widths = widths.size();
+
+    size_t length = riptide::periodogram_length(size, tsamp, period_min, period_max, bins_min, bins_max);
+    size_t basep_length = riptide::periodogram_base_period_length(size, tsamp, period_min, period_max, bins_min, bins_max);
+
+    auto periods = riptide::new_cstyle_array<double>({length});
+    auto foldbins = riptide::new_cstyle_array<uint32_t>({length});
+    auto base_periods = riptide::new_cstyle_array<double>({basep_length});
+    auto tsamps = riptide::new_cstyle_array<double>({basep_length});
+
+    std::vector<riptide::ConstComplexBlock> blocks;
+    std::vector<std::unique_ptr<std::complex<float>[]>> owned_blocks;
+
+    riptide::vis_ffa_transform(
+        vis_data.data(0),
+        size,
+        tsamp,
+        widths.data(0),
+        num_widths,
+        period_min,
+        period_max,
+        bins_min,
+        bins_max,
+        periods.mutable_data(0),
+        foldbins.mutable_data(0),
+        base_periods.mutable_data(0),
+        tsamps.mutable_data(0),
+        blocks,
+        owned_blocks
+    );
+
+    py::list py_blocks;
+    for (const auto& block : blocks) {
+        py::array_t<std::complex<float>> arr({block.rows, block.cols}, block.ptr, py::none());
+        py_blocks.append(std::move(arr));
+    }
+
+    return std::make_tuple(periods, foldbins, base_periods, tsamps, py_blocks);
 }
 
 
@@ -269,6 +332,12 @@ PYBIND11_MODULE(libcpp, m)
         py::arg("data"), py::arg("tsamp"), py::arg("widths"), py::arg("period_min"), py::arg("period_max"), py::arg("bins_min"), py::arg("bins_max"),
         "Compute the periodogram of a time series. Returns a 3-tuple of arrays: trial periods, number of phase bins, S/N"
     );
+
+    m.def(
+        "vis_ffa_transform", &vis_ffa_transform,
+        py::arg("vis_data"), py::arg("tsamp"), py::arg("widths"), py::arg("period_min"), py::arg("period_max"), py::arg("bins_min"), py::arg("bins_max"),
+        "Compute the FFA transforms of a complex visibility time series. Returns a 3-tuple of arrays: trial periods, number of phase bins, list of FFA transforms"
+    )
 
     m.def(
         "running_median", &running_median, py::arg("data"), py::arg("width"),
