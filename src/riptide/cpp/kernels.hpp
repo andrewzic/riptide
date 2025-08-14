@@ -1,23 +1,29 @@
 #ifndef KERNELS_HPP
 #define KERNELS_HPP
 
-#include <cstddef>      // size_t
-#include <complex>      // std::complex
-#include <cstring>      // memcpy
+#include <cstddef>
+#include <complex>
+#include <cstring>
+#include <type_traits>
+#include <cmath>
+#include <algorithm>
+#include <utility> // std::pair
 
 namespace riptide {
 
-// -----------------------------------
-// Float Kernels
-// -----------------------------------
+// ===================================
+// Generic Kernels (templated)
+// ===================================
 
-inline void add(const float* a, const float* b, size_t n, float* out)
+template <typename T>
+inline void add(const T* a, const T* b, size_t n, T* out)
 {
     for (size_t i = 0; i < n; ++i)
         out[i] = a[i] + b[i];
 }
 
-inline void fused_rollback_add(const float* a, const float* b, size_t n, size_t shift, float* out)
+template <typename T>
+inline void fused_rollback_add(const T* a, const T* b, size_t n, size_t shift, T* out)
 {
     const size_t p = shift % n;
     const size_t q = n - p;
@@ -25,35 +31,45 @@ inline void fused_rollback_add(const float* a, const float* b, size_t n, size_t 
     add(a + q, b, p, out + q);
 }
 
-inline void rollback(const float* x, size_t n, size_t shift, float* out)
+template <typename T>
+inline void rollback(const T* x, size_t n, size_t shift, T* out)
 {
     const size_t p = shift % n;
     const size_t q = n - p;
-    std::memcpy(out, x + p, q * sizeof(float));
-    std::memcpy(out + q, x, p * sizeof(float));
+    std::memcpy(out, x + p, q * sizeof(T));
+    std::memcpy(out + q, x, p * sizeof(T));
 }
 
-inline void add_scalar(const float* x, size_t n, float a, float* out)
+template <typename T>
+inline void add_scalar(const T* x, size_t n, T a, T* out)
 {
     for (size_t i = 0; i < n; ++i)
         out[i] = x[i] + a;
 }
 
-inline float diff_max(const float* x, const float* y, size_t n)
+template <typename T>
+inline auto diff_max(const T* x, const T* y, size_t n)
+    -> typename std::conditional<std::is_arithmetic<T>::value, T, float>::type
 {
-    float dmax = x[0] - y[0];
+    using ReturnT = typename std::conditional<std::is_arithmetic<T>::value, T, float>::type;
+
+    ReturnT dmax = std::is_arithmetic<T>::value ? (x[0] - y[0]) : std::abs(x[0] - y[0]);
+
     for (size_t i = 1; i < n; ++i)
     {
-        float d = x[i] - y[i];
+        ReturnT d = std::is_arithmetic<T>::value ? (x[i] - y[i]) : std::abs(x[i] - y[i]);
         if (d > dmax)
             dmax = d;
     }
     return dmax;
 }
 
-inline void circular_prefix_sum(const float* x, size_t size, size_t nsum, float* out)
+template <typename T>
+inline void circular_prefix_sum(const T* x, size_t size, size_t nsum, T* out)
 {
-    double acc = 0.0;
+    using Scalar = typename std::conditional<std::is_arithmetic<T>::value, T, float>::type;
+
+    T acc = T(0);
     const size_t jmax = std::min(size, nsum);
 
     for (size_t j = 0; j < jmax; ++j)
@@ -65,84 +81,49 @@ inline void circular_prefix_sum(const float* x, size_t size, size_t nsum, float*
     if (nsum <= size)
         return;
 
-    const float sumx = acc;
+    const T sumx = acc;
     const size_t q = nsum / size;
     const size_t r = nsum % size;
 
     for (size_t i = 1; i < q; ++i)
-        add_scalar(out, size, i * sumx, out + i * size);
+        add_scalar(out, size, sumx * static_cast<Scalar>(i), out + i * size);
 
-    add_scalar(out, r, q * sumx, out + q * size);
+    add_scalar(out, r, sumx * static_cast<Scalar>(q), out + q * size);
 }
 
-// -----------------------------------
-// Complex<float> Kernels
-// -----------------------------------
-
-inline void add(const std::complex<float>* a, const std::complex<float>* b, size_t n, std::complex<float>* out)
+// ===================================
+// diff_max_index helper
+// ===================================
+template <typename T>
+inline std::pair<T, size_t> diff_max_index(const T* x, const T* y, size_t n)
 {
-    for (size_t i = 0; i < n; ++i)
-        out[i] = a[i] + b[i];
-}
+    using Scalar = typename std::conditional<std::is_arithmetic<T>::value, T, float>::type;
 
-inline void fused_rollback_add(const std::complex<float>* a, const std::complex<float>* b, size_t n, size_t shift, std::complex<float>* out)
-{
-    const size_t p = shift % n;
-    const size_t q = n - p;
-    add(a, b + p, q, out);
-    add(a + q, b, p, out + q);
-}
+    Scalar best_val = std::is_arithmetic<T>::value ? (x[0] - y[0]) : std::abs(x[0] - y[0]);
+    size_t best_idx = 0;
 
-inline void rollback(const std::complex<float>* x, size_t n, size_t shift, std::complex<float>* out)
-{
-    const size_t p = shift % n;
-    const size_t q = n - p;
-    std::memcpy(out, x + p, q * sizeof(std::complex<float>));
-    std::memcpy(out + q, x, p * sizeof(std::complex<float>));
-}
-
-inline void add_scalar(const std::complex<float>* x, size_t n, std::complex<float> a, std::complex<float>* out)
-{
-    for (size_t i = 0; i < n; ++i)
-        out[i] = x[i] + a;
-}
-
-inline float diff_max(const std::complex<float>* x, const std::complex<float>* y, size_t n)
-{
-    float dmax = std::abs(x[0] - y[0]);
-    for (size_t i = 1; i < n; ++i)
-    {
-        float d = std::abs(x[i] - y[i]);
-        if (d > dmax)
-            dmax = d;
+    for (size_t i = 1; i < n; ++i) {
+        Scalar val = std::is_arithmetic<T>::value ? (x[i] - y[i]) : std::abs(x[i] - y[i]);
+        if (val > best_val) {
+            best_val = val;
+            best_idx = i;
+        }
     }
-    return dmax;
-}
-
-inline void circular_prefix_sum(const std::complex<float>* x, size_t size, size_t nsum, std::complex<float>* out)
-{
-    std::complex<double> acc = 0.0;
-    const size_t jmax = std::min(size, nsum);
-
-    for (size_t j = 0; j < jmax; ++j)
-    {
-        acc += x[j];
-        out[j] = acc;
-    }
-
-    if (nsum <= size)
-        return;
-
-    const std::complex<float> sumx = acc;
-    const size_t q = nsum / size;
-    const size_t r = nsum % size;
-
-    for (size_t i = 1; i < q; ++i)
-        add_scalar(out, size, i * sumx, out + i * size);
-
-    add_scalar(out, r, q * sumx, out + q * size);
+    return {best_val, best_idx};
 }
 
 } // namespace riptide
+
+// Compute stddev of an array
+inline float compute_stddev(const float* data, size_t n)
+{
+    float mean = std::accumulate(data, data + n, 0.f) / n;
+    float accum = 0.f;
+    for (size_t i = 0; i < n; ++i) {
+        float diff = data[i] - mean;
+        accum += diff * diff;
+    }
+    return std::sqrt(accum / n);
+}
 
 #endif // KERNELS_HPP

@@ -241,3 +241,20 @@ def downsample(data, factor):
         Downsampled data.
     """
     return libcpp.downsample(data, factor)
+
+def complex_downsample(data, factor):
+    """Downsample a complex-valued array by a real-valued factor.
+
+    Parameters
+    ----------
+    data : array_like
+        Time series data to downsample.
+    factor : float
+        Downsampling factor.
+
+    Returns
+    -------
+    out : ndarray, complex64
+        Downsampled data.
+    """
+    return libcpp.complex_downsample(data, factor)

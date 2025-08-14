@@ -4,10 +4,14 @@ import warnings
 ##### Non-standard imports #####
 import numpy as np
 import sparse
+from astropy.io import fits
+from astropy.wcs import WCS
+from astropy.coordinates import SkyCoord, SkyOffsetFrame
+import astropy.units as u
 
 ##### Local imports #####
 from .running_medians import fast_running_median
-from .libffa import downsample, generate_signal
+from .libffa import complex_downsample, downsample, generate_signal
 from .reading import PrestoInf, SigprocHeader
 from .metadata import Metadata
 from .folding import fold
@@ -40,17 +44,21 @@ class TimeSeries(object):
     TimeSeries.generate : Generate a noisy time series containing a fake pulsar signal
     """
 
-    def __init__(self, data, tsamp, metadata=None, copy=False):
+    def __init__(self, data, tsamp, metadata=None, copy=False, dtype=None):
         if copy:
-            self._data = np.asarray(data, dtype=np.float32).copy()
+            self._data = np.asarray(data, dtype=dtype).copy()
         else:
-            self._data = np.asarray(data, dtype=np.float32)
+            self._data = np.asarray(data, dtype=dtype)
         self._tsamp = float(tsamp)
         self.metadata = Metadata(metadata) if metadata is not None else Metadata({})
 
         # Carrying a tobs attribute is quite practical in later stages of
         # the pipeline (peak detection in periodograms)
         self.metadata["tobs"] = self.length
+        if dtype is None:
+            self.dtype = np.float32
+        else:
+            self.dtype = dtype #probably want to check this is somethign sensible here
 
     @property
     def data(self):
@@ -83,15 +91,16 @@ class TimeSeries(object):
         """
         # NOTE: use float64 accumulator to avoid saturation issues when the
         # data have large values
-        m = self.data.mean(dtype=np.float64)
-        v = self.data.var(dtype=np.float64)
+        m = self.data.mean(dtype=np.complex128, axis=0) #complex
+        v = self.data.var(dtype=np.complex128, axis=0) #real and positive
         norm = v**0.5
 
         if inplace:
-            self._data = (self.data - m) / norm
+            # i think we don't want to mean subtract as that will mess complex phases
+            self._data = (self.data ) / norm 
         else:
             return TimeSeries(
-                (self.data - m) / norm, self.tsamp, metadata=self.metadata
+                (self.data ) / norm, self.tsamp, metadata=self.metadata, dtype=self.dtype
             )
 
     @timing
@@ -123,7 +132,7 @@ class TimeSeries(object):
         if inplace:
             self._data -= rmed
         else:
-            return TimeSeries(self.data - rmed, self.tsamp, metadata=self.metadata)
+            return TimeSeries(self.data - rmed, self.tsamp, metadata=self.metadata, dtype=self.dtype)
 
     def downsample(self, factor, inplace=False):
         """Downsample data by a real-valued factor, by grouping and adding
@@ -142,14 +151,19 @@ class TimeSeries(object):
         out : TimeSeries or None
             The downsampled TimeSeries, if 'inplace' was set to False
         """
+        if np.issubdtype(self.dtype, np.complexfloating):
+            downsample_func = complex_downsample
+        else:
+            downsample_func = downsample
         if inplace:
-            self._data = downsample(self.data, factor)
+            self._data = downsample_func(self.data, factor)
             self._tsamp *= factor
         else:
             return TimeSeries(
-                downsample(self.data, factor),
+                downsample_func(self.data, factor),
                 factor * self.tsamp,
                 metadata=self.metadata,
+                dtype=self.dtype
             )
 
     def fold(self, period, bins, subints=None):
@@ -278,7 +292,7 @@ class TimeSeries(object):
             TimeSeries object.
         """
         data = np.fromfile(fname, dtype=dtype)
-        return cls(data, tsamp, copy=False)
+        return cls(data, tsamp, copy=False, dtype=dtype)
 
     @classmethod
     def from_npy_file(cls, fname, tsamp):
@@ -297,7 +311,7 @@ class TimeSeries(object):
             TimeSeries object.
         """
         data = np.load(fname)
-        return cls(data, tsamp, copy=False)
+        return cls(data, tsamp, copy=False, dtype=type(data))
 
     @classmethod
     @timing
@@ -406,9 +420,9 @@ class TimeSeries(object):
         return str(self)
 
     @classmethod
-    def from_dict(cls, items):
+    def from_dict(cls, items, dtype=np.float32):
         return cls(
-            items["data"], items["tsamp"], metadata=items["metadata"], copy=False
+            items["data"], items["tsamp"], metadata=items["metadata"], copy=False, dtype=dtype
         )
 
     def to_dict(self):
@@ -442,7 +456,7 @@ class VisTimeSeries(object):
     TimeSeries.generate : Generate a noisy time series containing a fake pulsar signal
     """
 
-    def __init__(self, data, tsamp, metadata=None, copy=False):
+    def __init__(self, data, tsamp, metadata=None, copy=False, nu=None, nv=None, du=None, dv=None, phase_centre=None):
         if copy:
             self._data = np.ascontiguousarray(data, dtype=np.complex64).copy()
         else:
@@ -453,6 +467,15 @@ class VisTimeSeries(object):
         # Carrying a tobs attribute is quite practical in later stages of
         # the pipeline (peak detection in periodograms)
         self.metadata["tobs"] = self.length
+        self.dtype = np.complex64
+        self.nu = nu
+        self.nv = nv
+        self.du = du
+        self.dv = dv
+        if phase_centre is None:
+            self.phase_centre = None #
+        else:
+            self.phase_centre = SkyCoord(phase_centre[0]*u.deg, phase_centre[1]*u.deg, frame="icrs") if isinstance(phase_centre, tuple) else phase_centre
 
     @property
     def data(self):
@@ -467,6 +490,78 @@ class VisTimeSeries(object):
     def copy(self):
         """Returns a new copy of the TimeSeries"""
         return copy.deepcopy(self)
+
+    def get_sparse_unique_uv(self):
+        _, x_coords, y_coords = self.data.coords
+        xy_coords = np.stack([x_coords, y_coords], axis=1)
+        unique_xy = np.unique(xy_coords, axis=0)
+        self.unique_uv = unique_xy
+
+    def set_grid_params(self, nu, nv, du, dv):
+        """
+        set grid parameters nu, nv, du, dv i.e. size of grid on u and v axes,
+        and the pixel size du, dv
+        """
+        self.nu = nu
+        self.nv = nv
+        self.du = du
+        self.dv = dv
+
+    def set_phase_centre(self, ra_deg, dec_deg):
+
+        #phase_centre: tuple with ra_deg, dec_deg
+        self.phase_centre = SkyCoord(ra_deg[0]*u.deg, dec_deg[1]*u.deg, frame="icrs") 
+
+    def get_skycoords_from_psf_header(self, header):
+        """
+        Convert (u, v) gridded visibilities into absolute sky coordinates.
+
+        Parameters:
+        -----------
+        header : astropy.io.fits.Header
+            FITS header containing gridded uv data (with NAXIS1/2 and CDELT1/2).
+
+        Returns:
+        --------
+        sky_coords : astropy.coordinates.SkyCoord
+            2D array of absolute sky coordinates (RA/Dec) with shape (ny, nx).
+        """
+        if self.phase_centre is None:
+            raise ValueError("phase_centre is not set. Please set with set_phase_centre")
+
+        # Image dimensions
+        nx = header.get('NAXIS1')
+        ny = header.get('NAXIS2')
+
+        # uv pixel size (in wavelengths^-1)
+        du = header.get('CDELT1', 1.0)  # Δu
+        dv = header.get('CDELT2', 1.0)  # Δv
+
+        #set the grid parameter attributes
+        self.set_grid_params(nx, ny, du, dv)
+
+        # Angular pixel size in radians (Fourier dual of baseline spacing)
+        delta_l = 1.0 / (nx * abs(du))  # radians
+        delta_m = 1.0 / (ny * abs(dv))  # radians
+
+        # Offset grids (direction cosines l, m), centered
+        l = (np.arange(nx) - nx // 2) * delta_l
+        m = (np.arange(ny) - ny // 2) * delta_m
+        l_grid, m_grid = np.meshgrid(l, m)  # shape (ny, nx)
+
+        # Convert to astropy Quantity (radians)
+        l_offsets = l_grid * u.rad
+        m_offsets = m_grid * u.rad
+
+        # Define offset frame centered on phase center
+        offset_frame = SkyOffsetFrame(origin=self.phase_centre)
+
+        # Create offset coordinates and transform to absolute frame
+        offset_coords = SkyCoord(l_offsets, m_offsets, frame=offset_frame)
+        sky_coords = offset_coords.transform_to(self.phase_centre.frame)
+        self.sky_coords = sky_coords
+        #a grid of SkyCoords of the same shape as the input image that can be indexed with pixel coords
+        return sky_coords
 
     def normalise(self, inplace=False):
         """Normalise to zero mean and unit variance. if 'inplace' is False,
@@ -545,11 +640,11 @@ class VisTimeSeries(object):
             The downsampled TimeSeries, if 'inplace' was set to False
         """
         if inplace:
-            self._data = downsample(self.data.real, factor)+1j*downsample(self.data.imag, factor)
+            self._data = complex_downsample(self.data, factor)
             self._tsamp *= factor
         else:
-            return TimeSeries(
-                downsample(self.data.real, factor)+1j*downsample(self.data.imag, factor),
+            return VisTimeSeries(
+                complex_downsample(self.data, factor),
                 factor * self.tsamp,
                 metadata=self.metadata,
             )
@@ -639,33 +734,43 @@ class VisTimeSeries(object):
         return cls(data, tsamp, copy=False, metadata=metadata)
 
     @classmethod
-    def from_real_imag_cube(real_cube_file, imag_cube_file, threshold):
+    def from_real_imag_cube(real_cube_file, imag_cube_file, threshold=3e-3):
         with fits.open(real_cube_file, memmap=True) as real_hdul, fits.open(imag_cube_file, memmap=True) as imag_hdul:
 
-            #header = real_hdul[0].header
+            header = real_hdul[0].header
+            wcs = WCS(header)
+            nu = header["NAXIS1"]
+            nv = header["NAXIS2"]
+            du = header["CDELT1"]
+            dv = header["CDELT2"]
+            ctype = "TIME"
+            fits_idx = wcs.axis_type_names.index(ctype) + 1
+            tsamp = float(header[f"CDELT{fits_idx}"])
             real_data = np.nan_to_num(real_hdul[0].data.squeeze(), nan=0.0, posinf=0.0, neginf=0.0)
             imag_data = np.nan_to_num(imag_hdul[0].data.squeeze(), nan=0.0, posinf=0.0, neginf=0.0)
 
             data = real_data + 1j * imag_data
 
-            #uv_coords = get_uv_coords_from_header(header)
-
             # Apply threshold
             sparse_grid = sparse.COO(np.where(np.abs(data) > threshold, data, 0))
 
-            # Get non-zero indices
-            #nonzero_indices = np.array(sparse_layer.coords).Ta
-            #nonzero_uv = uv_coords[nonzero_indices[:, 0], nonzero_indices[:, 1]]
-
-        return sparse_grid #, nonzero_uv
-    
+        return cls(sparse_grid, tsamp, dtype=sparse_grid.dtype, nu=nu, nv=nv, du=du, dv=dv)
+                   
     @classmethod
     def from_img_cube(cube_file):
         with fits.open(cube_file, memmap=True) as hdul:
-
+            header = hdul[0].header
+            wcs = WCS(header)
+            nu = header["NAXIS1"]
+            nv = header["NAXIS2"]
+            du = header["CDELT1"]
+            dv = header["CDELT2"]
+            ctype = "TIME"
+            fits_idx = wcs.axis_type_names.index(ctype) + 1
+            tsamp = float(header[f"CDELT{fits_idx}"])
             cubedata = np.nan_to_num(hdul[0].data.squeeze(), nan=0.0, posinf=0.0, neginf=0.0)
         
-        return cubedata
+        return cls(cubedata, tsamp, dtype=sparse_grid.dtype, nu=nu, nv=nv, du=du, dv=dv)
 
     @classmethod
     def from_numpy_array(cls, array, tsamp, copy=False):
@@ -689,7 +794,7 @@ class VisTimeSeries(object):
         return cls(array, tsamp, copy=copy)
 
     @classmethod
-    def from_binary(cls, fname, tsamp, dtype=np.complex32):
+    def from_binary(cls, fname, tsamp, dtype=np.complex64):
         """Create a new TimeSeries from a raw binary file, containing the
         time series data without any header or footer. This will work as long
         as the data can be loaded with numpy.fromfile().
@@ -856,5 +961,6 @@ class VisTimeSeries(object):
             "data": self.data[:, *ind],
             "tsamp": self.tsamp,
             "metadata": self.metadata
-            }
+            }, 
+            dtype=np.complex64
         )

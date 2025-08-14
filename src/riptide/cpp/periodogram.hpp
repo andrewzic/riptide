@@ -151,10 +151,8 @@ size_t periodogram_base_period_length(
         /* FFA transform loop */
         for (size_t bins = bstart; bins <= bstop; ++bins)
             {
-            const size_t rows = n / bins;
-            const double period_ceil = std::min(period_max_samples, bins + 1.0);
-            const size_t rows_eval = std::min(rows, ceilshift(rows, bins, period_ceil));
-            length += 1; #1 extra base period FFA transform per base_period=bins
+            length += 1;
+            // #1 extra base period FFA transform per base_period=bins
             }
         }
     return length;
@@ -180,88 +178,88 @@ void periodogram(
     uint32_t* __restrict__ foldbins,
     float* __restrict__ snr)
     {
-    periodogram_check_arguments(size, tsamp, period_min, period_max, bins_min, bins_max);
+//     periodogram_check_arguments(size, tsamp, period_min, period_max, bins_min, bins_max);
 
-    // Initial downsampling factor
-    // We want: ds_ini * tsamp * bmin = period_min
-    double ds_ini = period_min / (tsamp * bins_min);
+//     // Initial downsampling factor
+//     // We want: ds_ini * tsamp * bmin = period_min
+//     double ds_ini = period_min / (tsamp * bins_min);
 
-    // Geometric growth factor for the downsampling factor
-    double ds_geo = (bins_max + 1.0) / bins_min;
+//     // Geometric growth factor for the downsampling factor
+//     double ds_geo = (bins_max + 1.0) / bins_min;
 
-    // Number of required downsampling cycles
-    size_t num_downsamplings = ceil(log(period_max / period_min) / log(ds_geo));
+//     // Number of required downsampling cycles
+//     size_t num_downsamplings = ceil(log(period_max / period_min) / log(ds_geo));
 
-    // Allocate buffers
-    const size_t bufsize = downsampled_size(size, ds_ini);
-    std::unique_ptr<float[]> input_mem(new float[bufsize]);
-    std::unique_ptr<float[]> ffabuf_mem(new float[bufsize]);
-    std::unique_ptr<float[]> ffaout_mem(new float[bufsize]);
-    const float* input = input_mem.get();
-    float* ffabuf = ffabuf_mem.get();
-    float* ffaout = ffaout_mem.get();
+//     // Allocate buffers
+//     const size_t bufsize = downsampled_size(size, ds_ini);
+//     std::unique_ptr<float[]> input_mem(new float[bufsize]);
+//     std::unique_ptr<float[]> ffabuf_mem(new float[bufsize]);
+//     std::unique_ptr<float[]> ffaout_mem(new float[bufsize]);
+//     const float* input = input_mem.get();
+//     float* ffabuf = ffabuf_mem.get();
+//     float* ffaout = ffaout_mem.get();
         
-    /* Downsampling loop */
-    for (size_t ids = 0; ids < num_downsamplings; ++ids)
-        {
-        const double f = ds_ini * pow(ds_geo, ids); // current downsampling factor
-        const double tau = f * tsamp; // current sampling time
-        const double period_max_samples = period_max / tau;
-        const size_t n = downsampled_size(size, f); // current number of input samples
+//     /* Downsampling loop */
+//     for (size_t ids = 0; ids < num_downsamplings; ++ids)
+//         {
+//         const double f = ds_ini * pow(ds_geo, ids); // current downsampling factor
+//         const double tau = f * tsamp; // current sampling time
+//         const double period_max_samples = period_max / tau;
+//         const size_t n = downsampled_size(size, f); // current number of input samples
 
-        // downsample() requires f > 1, but we still allow searching the data at their
-        // original resolution.
-        if (f == 1) {
-            input = data;
-        }            
-        else {
-            downsample(data, size, f, input_mem.get());
-            input = input_mem.get();
-        }
+//         // downsample() requires f > 1, but we still allow searching the data at their
+//         // original resolution.
+//         if (f == 1) {
+//             input = data;
+//         }            
+//         else {
+//             downsample(data, size, f, input_mem.get());
+//             input = input_mem.get();
+//         }
 
-        // Min and max number of bins with which to FFA transform in order to
-        // cover all trial periods between period_min and period_max.
-        // NOTE: bstop is INclusive
-        // Also, we MUST enforce bstop <= n, to avoid doing an FFA transform with 0 rows
-        const size_t bstart = bins_min;
-        const size_t bstop = std::min({ bins_max, n, size_t(period_max_samples) });
+//         // Min and max number of bins with which to FFA transform in order to
+//         // cover all trial periods between period_min and period_max.
+//         // NOTE: bstop is INclusive
+//         // Also, we MUST enforce bstop <= n, to avoid doing an FFA transform with 0 rows
+//         const size_t bstart = bins_min;
+//         const size_t bstop = std::min({ bins_max, n, size_t(period_max_samples) });
 
-        /* FFA transform loop */
-        for (size_t bins = bstart; bins <= bstop; ++bins)
-            {
-            const size_t rows = n / bins;
-            const float stdnoise = sqrt(rows * downsampled_variance(size, f));
-            const double period_ceil = std::min(period_max_samples, bins + 1.0);
-            const size_t rows_eval = std::min(rows, ceilshift(rows, bins, period_ceil));
+//         /* FFA transform loop */
+//         for (size_t bins = bstart; bins <= bstop; ++bins)
+//             {
+//             const size_t rows = n / bins;
+//             const float stdnoise = sqrt(rows * downsampled_variance(size, f));
+//             const double period_ceil = std::min(period_max_samples, bins + 1.0);
+//             const size_t rows_eval = std::min(rows, ceilshift(rows, bins, period_ceil));
 
-            transform(input, rows, bins, ffabuf, ffaout);
+//             transform(input, rows, bins, ffabuf, ffaout);
             
-            auto block = ConstBlock(ffaout, rows_eval, bins);
-            snr2(block, widths, num_widths, stdnoise, snr);
+//             auto block = ConstBlock(ffaout, rows_eval, bins);
+//             snr2(block, widths, num_widths, stdnoise, snr);
 
-            for (size_t s = 0; s < rows_eval; ++s)
-                {
-                periods[s] = tau * bins * bins / (bins - s / (rows - 1.0));
-                foldbins[s] = bins;
-                }
+//             for (size_t s = 0; s < rows_eval; ++s)
+//                 {
+//                 periods[s] = tau * bins * bins / (bins - s / (rows - 1.0));
+//                 foldbins[s] = bins;
+//                 }
 
-            snr += rows_eval * num_widths;
-            periods += rows_eval;
-            foldbins += rows_eval;
-            }
-        }
+//             snr += rows_eval * num_widths;
+//             periods += rows_eval;
+//             foldbins += rows_eval;
+//             }
+//         }
     }
 
 void vis_ffa_transform(
-    const complex* __restrict__ vis_data,
+    const std::complex<float>* __restrict__ vis_data,
     size_t size,
     double tsamp,
     double period_min,
     double period_max,
     size_t bins_min,
     size_t bins_max,
-    double* __restrict__ periods,
-    uint32_t* __restrict__ foldbins,
+    std::vector<std::vector<double>>& block_periods,
+    std::vector<std::vector<uint32_t>>& block_foldbins,
     double* __restrict__ base_periods,
     double* __restrict__ tsamps,
     std::vector<ConstComplexBlock>& blocks,
@@ -285,7 +283,8 @@ void vis_ffa_transform(
     std::unique_ptr<std::complex<float>[]> input_mem(new std::complex<float>[complex_bufsize]);
     std::unique_ptr<std::complex<float>[]> ffabuf_mem(new std::complex<float>[complex_bufsize]);
     std::unique_ptr<std::complex<float>[]> ffaout_mem(new std::complex<float>[complex_bufsize]);
-    std::complex<float>* input = input_mem.get();
+    const std::complex<float>* input = input_mem.get();
+    //std::complex<float>* input = input_mem.get();
     std::complex<float>* ffabuf = ffabuf_mem.get();
     std::complex<float>* ffaout = ffaout_mem.get();
 
@@ -313,7 +312,7 @@ void vis_ffa_transform(
         // Also, we MUST enforce bstop <= n, to avoid doing an FFA transform with 0 rows
         const size_t bstart = bins_min;
         const size_t bstop = std::min({ bins_max, n, size_t(period_max_samples) });
-
+        size_t i = 0;
         /* FFA transform loop */
         for (size_t bins = bstart; bins <= bstop; ++bins)
             {
@@ -323,11 +322,13 @@ void vis_ffa_transform(
             
             transform(input, rows, bins, ffabuf, ffaout);
 
-            for (size_t s = 0; s < rows_eval; ++s)
-                {
-                periods[s] = tau * bins * bins / (bins - s / (rows - 1.0));
-                foldbins[s] = bins;
-                }
+            std::vector<double> this_block_periods(rows_eval);
+            std::vector<uint32_t> this_block_foldbins(rows_eval);
+
+            for (size_t s = 0; s < rows_eval; ++s) {
+                this_block_periods[s] = tau * bins * bins / (bins - s / (rows - 1.0));
+                this_block_foldbins[s] = bins;
+            }
             
             // copy data pointed to by ffaout to a new block of memory
             std::unique_ptr<std::complex<float>[]> block_mem(new std::complex<float>[rows_eval * bins]);
@@ -335,14 +336,12 @@ void vis_ffa_transform(
             blocks.emplace_back(block_mem.get(), rows_eval, bins);
             // keep track of memory
             owned_blocks.emplace_back(std::move(block_mem));
-            
-            periods += rows_eval;
-            foldbins += rows_eval;
-            
-            base_periods[0] = tau * bins;
-            tsamps[0] = tsamp;
-            base_periods += 1;
-            tsamps += 1;
+            block_periods.emplace_back(std::move(this_block_periods));
+            block_foldbins.emplace_back(std::move(this_block_foldbins));
+
+            base_periods[i] = tau * bins;
+            tsamps[i] = tau;
+            ++i;
 
             }
         }

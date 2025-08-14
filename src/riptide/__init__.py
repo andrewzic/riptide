@@ -3,16 +3,17 @@
 from ._version import version as __version__
 
 ### Major classes
-from .time_series import TimeSeries
-from .periodogram import Periodogram
+from .time_series import TimeSeries, VisTimeSeries
+from .periodogram import Periodogram, UV_FFA
 from .metadata import Metadata
 from .candidate import Candidate
 
 ### Major functions
 from .search import ffa_search
+from .vis_search import vis_ffa_search
 from .running_medians import running_median, fast_running_median
 
-from .libffa import ffa1, ffa2, ffafreq, ffaprd, generate_signal, downsample, boxcar_snr
+from .libffa import ffa1, ffa2, ffafreq, ffaprd, generate_signal, downsample, complex_downsample, boxcar_snr
 
 from .peak_detection import find_peaks
 
@@ -21,10 +22,13 @@ from .serialization import save_json, load_json
 
 __all__ = [
     "TimeSeries",
+    "VisTimeSeries",
     "Periodogram",
+    "UV_FFA",
     "Metadata",
     "Candidate",
     "ffa_search",
+    "vis_ffa_search",
     "ffa1",
     "ffa2",
     "ffafreq",

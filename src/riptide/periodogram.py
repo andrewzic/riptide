@@ -145,7 +145,7 @@ class UV_FFA(object):
     
     @property
     def v(self):
-        return uv_inds[0]
+        return uv_inds[1]
 
     @property
     def tobs(self):

@@ -19,6 +19,11 @@ SAFE_FAST_MATH_FLAGS = [
     "-fno-trapping-math",
 ]
 
+#FFTW_PREFIX = "/opt/homebrew"  # change if you installed elsewhere
+#FFTW_INCLUDE = f"{FFTW_PREFIX}/include"
+#FFTW_LIBDIR = f"{FFTW_PREFIX}/lib"
+#FFTW_DYLIB  = f"{FFTW_LIBDIR}/libfftw3f.dylib"  # single-precision
+
 # The main interface is through Pybind11Extension.
 # * You can add cxx_std=11/14/17, and then build_ext can be removed.
 # * You can set include_pybind11=false to add the include directory yourself,
@@ -32,6 +37,11 @@ ext_modules = [
         "riptide.libcpp",
         sorted(["src/riptide/cpp/python_bindings.cpp"]),
         extra_compile_args=["-O3", "-march=native"] + SAFE_FAST_MATH_FLAGS,
+        #include_dirs=[FFTW_INCLUDE],   # <-- ADD THIS
+        #library_dirs=[FFTW_LIBDIR],  # where libfftw3f.dylib lives
+        #libraries=["fftw3f"],
+        #extra_link_args=[FFTW_DYLIB, f"-Wl,-rpath,{FFTW_LIBDIR}", "-Wl,-u,_fftwf_destroy_plan"],  # ensure runtime can find it
+        language="c++",
     ),
 ]
 
