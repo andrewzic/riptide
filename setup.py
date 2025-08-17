@@ -1,15 +1,8 @@
+import os
+import sys
 from setuptools import setup
-
-# Available at setup time due to pyproject.toml
 from pybind11.setup_helpers import Pybind11Extension, build_ext
 
-# WARNING: Enabling -freciprocal-math (which is also enabled by
-# -funsafe-math-optimizations or -ffast-math) causes surprising inconsistencies
-# when calculating the size of the output periodogram, and the size of the
-# buffers to store data downsampled by a real-valued factor.
-# In turn, this can cause segmentation faults (code attempts to write past the
-# end of these arrays).
-# The flags below provide the same speedups as -ffast-math, without the risks.
 SAFE_FAST_MATH_FLAGS = [
     "-fassociative-math",
     "-fno-math-errno",
@@ -19,37 +12,53 @@ SAFE_FAST_MATH_FLAGS = [
     "-fno-trapping-math",
 ]
 
-#FFTW_PREFIX = "/opt/homebrew"  # change if you installed elsewhere
-#FFTW_INCLUDE = f"{FFTW_PREFIX}/include"
-#FFTW_LIBDIR = f"{FFTW_PREFIX}/lib"
-#FFTW_DYLIB  = f"{FFTW_LIBDIR}/libfftw3f.dylib"  # single-precision
+include_dirs = []
+library_dirs = []
+extra_link_args = []
+libraries = ["fftw3f"]   # we only need the float API
 
-# The main interface is through Pybind11Extension.
-# * You can add cxx_std=11/14/17, and then build_ext can be removed.
-# * You can set include_pybind11=false to add the include directory yourself,
-#   say from a submodule.
-#
-# Note:
-#   Sort input source files if you glob sources to ensure bit-for-bit
-#   reproducible builds (https://github.com/pybind/python_example/pull/53)
+fftwd_dir = os.environ.get("FFTWDIR")
+if fftwd_dir:
+    include_dirs.append(os.path.join(fftwd_dir, "include"))
+    library_dirs.append(os.path.join(fftwd_dir, "lib"))
+    extra_link_args.append(f"-Wl,-rpath,{os.path.join(fftwd_dir, 'lib')}")
+
+conda_prefix = os.environ.get("CONDA_PREFIX")
+if conda_prefix:
+    include_dirs.append(os.path.join(conda_prefix, "include"))
+    library_dirs.append(os.path.join(conda_prefix, "lib"))
+    extra_link_args.append(f"-Wl,-rpath,{os.path.join(conda_prefix, 'lib')}")
+
+common_includes = ["/usr/include", "/usr/local/include"]
+common_libs = ["/usr/lib", "/usr/local/lib", "/usr/lib64", "/usr/local/lib64"]
+
+for d in common_includes:
+    if os.path.isdir(d):
+        include_dirs.append(d)
+
+for d in common_libs:
+    if os.path.isdir(d):
+        library_dirs.append(d)
+
+# De-duplicate
+include_dirs = list(dict.fromkeys(include_dirs))
+library_dirs = list(dict.fromkeys(library_dirs))
+
 ext_modules = [
     Pybind11Extension(
         "riptide.libcpp",
         sorted(["src/riptide/cpp/python_bindings.cpp"]),
         extra_compile_args=["-O3", "-march=native"] + SAFE_FAST_MATH_FLAGS,
-        #include_dirs=[FFTW_INCLUDE],   # <-- ADD THIS
-        #library_dirs=[FFTW_LIBDIR],  # where libfftw3f.dylib lives
-        #libraries=["fftw3f"],
-        #extra_link_args=[FFTW_DYLIB, f"-Wl,-rpath,{FFTW_LIBDIR}", "-Wl,-u,_fftwf_destroy_plan"],  # ensure runtime can find it
+        include_dirs=include_dirs,
+        library_dirs=library_dirs,
+        libraries=libraries,
+        extra_link_args=extra_link_args,
         language="c++",
     ),
 ]
 
-
 if __name__ == "__main__":
     setup(
         ext_modules=ext_modules,
-        # Currently, build_ext only provides an optional "highest supported C++
-        # level" feature, but in the future it may provide more features.
         cmdclass={"build_ext": build_ext},
     )

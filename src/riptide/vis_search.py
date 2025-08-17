@@ -141,6 +141,7 @@ def vis_ffa_image_candidates(
     # Validate input types/shapes
     if not isinstance(ffa_blocks, list) or not all(isinstance(b, np.ndarray) for b in ffa_blocks):
         raise ValueError("ffa_blocks must be a list of numpy arrays (complex64)")
+    uv_indices = np.asarray(uv_indices)
     if uv_indices.shape != (len(ffa_blocks), 2):
         raise ValueError("uv_indices must have shape (M, 2) matching ffa_blocks length")
     if psf_image.shape != (ny, nx):

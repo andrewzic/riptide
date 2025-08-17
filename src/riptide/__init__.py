@@ -10,7 +10,7 @@ from .candidate import Candidate
 
 ### Major functions
 from .search import ffa_search
-from .vis_search import vis_ffa_search
+from .vis_search import vis_ffa_search, vis_ffa_image_candidates
 from .running_medians import running_median, fast_running_median
 
 from .libffa import ffa1, ffa2, ffafreq, ffaprd, generate_signal, downsample, complex_downsample, boxcar_snr
@@ -29,6 +29,7 @@ __all__ = [
     "Candidate",
     "ffa_search",
     "vis_ffa_search",
+    "vis_ffa_image_candidates",
     "ffa1",
     "ffa2",
     "ffafreq",

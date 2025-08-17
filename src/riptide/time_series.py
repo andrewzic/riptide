@@ -456,9 +456,11 @@ class VisTimeSeries(object):
     TimeSeries.generate : Generate a noisy time series containing a fake pulsar signal
     """
 
-    def __init__(self, data, tsamp, metadata=None, copy=False, nu=None, nv=None, du=None, dv=None, phase_centre=None):
+    def __init__(self, data, tsamp, metadata=None, copy=False, nu=None, nv=None, du=None, dv=None, phase_centre=None, dtype=None, header=None):
         if copy:
             self._data = np.ascontiguousarray(data, dtype=np.complex64).copy()
+        elif isinstance(data, sparse.COO):
+            self._data = data
         else:
             self._data = np.ascontiguousarray(data, dtype=np.complex64)
         self._tsamp = float(tsamp)
@@ -467,7 +469,8 @@ class VisTimeSeries(object):
         # Carrying a tobs attribute is quite practical in later stages of
         # the pipeline (peak detection in periodograms)
         self.metadata["tobs"] = self.length
-        self.dtype = np.complex64
+        if dtype is None:
+            self.dtype = np.complex64
         self.nu = nu
         self.nv = nv
         self.du = du
@@ -476,6 +479,8 @@ class VisTimeSeries(object):
             self.phase_centre = None #
         else:
             self.phase_centre = SkyCoord(phase_centre[0]*u.deg, phase_centre[1]*u.deg, frame="icrs") if isinstance(phase_centre, tuple) else phase_centre
+        
+        self.header = header
 
     @property
     def data(self):
@@ -510,9 +515,13 @@ class VisTimeSeries(object):
     def set_phase_centre(self, ra_deg, dec_deg):
 
         #phase_centre: tuple with ra_deg, dec_deg
-        self.phase_centre = SkyCoord(ra_deg[0]*u.deg, dec_deg[1]*u.deg, frame="icrs") 
+        print(ra_deg, dec_deg)
+        self.phase_centre = SkyCoord(ra_deg*u.deg, dec_deg*u.deg, frame="icrs")
 
-    def get_skycoords_from_psf_header(self, header):
+    def set_header(self, header):
+        self.header = header
+
+    def get_skycoords_from_psf_header(self, header=None):
         """
         Convert (u, v) gridded visibilities into absolute sky coordinates.
 
@@ -529,6 +538,9 @@ class VisTimeSeries(object):
         if self.phase_centre is None:
             raise ValueError("phase_centre is not set. Please set with set_phase_centre")
 
+        if header is None:
+            header = self.header
+        
         # Image dimensions
         nx = header.get('NAXIS1')
         ny = header.get('NAXIS2')
@@ -548,7 +560,8 @@ class VisTimeSeries(object):
         l = (np.arange(nx) - nx // 2) * delta_l
         m = (np.arange(ny) - ny // 2) * delta_m
         l_grid, m_grid = np.meshgrid(l, m)  # shape (ny, nx)
-
+        print(l_grid)
+        
         # Convert to astropy Quantity (radians)
         l_offsets = l_grid * u.rad
         m_offsets = m_grid * u.rad
@@ -734,7 +747,8 @@ class VisTimeSeries(object):
         return cls(data, tsamp, copy=False, metadata=metadata)
 
     @classmethod
-    def from_real_imag_cube(real_cube_file, imag_cube_file, threshold=3e-3):
+    def from_real_imag_cube(cls, real_cube_file, imag_cube_file, threshold=3e-3):
+
         with fits.open(real_cube_file, memmap=True) as real_hdul, fits.open(imag_cube_file, memmap=True) as imag_hdul:
 
             header = real_hdul[0].header
@@ -746,6 +760,8 @@ class VisTimeSeries(object):
             ctype = "TIME"
             fits_idx = wcs.axis_type_names.index(ctype) + 1
             tsamp = float(header[f"CDELT{fits_idx}"])
+            print(real_hdul[0])
+            print(real_hdul[0].data.shape)
             real_data = np.nan_to_num(real_hdul[0].data.squeeze(), nan=0.0, posinf=0.0, neginf=0.0)
             imag_data = np.nan_to_num(imag_hdul[0].data.squeeze(), nan=0.0, posinf=0.0, neginf=0.0)
 
@@ -754,10 +770,10 @@ class VisTimeSeries(object):
             # Apply threshold
             sparse_grid = sparse.COO(np.where(np.abs(data) > threshold, data, 0))
 
-        return cls(sparse_grid, tsamp, dtype=sparse_grid.dtype, nu=nu, nv=nv, du=du, dv=dv)
+        return cls(sparse_grid, tsamp, dtype=sparse_grid.dtype, nu=nu, nv=nv, du=du, dv=dv, header=header)
                    
     @classmethod
-    def from_img_cube(cube_file):
+    def from_img_cube(cls, cube_file):
         with fits.open(cube_file, memmap=True) as hdul:
             header = hdul[0].header
             wcs = WCS(header)
@@ -958,7 +974,7 @@ class VisTimeSeries(object):
     def index(self, ind):
         """grabs one index of multi dimensional array and returns TimeSeries object for 1D ts data"""
         return TimeSeries.from_dict({
-            "data": self.data[:, *ind],
+            "data": self.data[:, *ind].todense(),
             "tsamp": self.tsamp,
             "metadata": self.metadata
             }, 

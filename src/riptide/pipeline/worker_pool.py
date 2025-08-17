@@ -2,10 +2,14 @@ import logging
 import multiprocessing
 
 from riptide import TimeSeries, ffa_search, find_peaks
-from riptide import VisTimeSeries, vis_ffa_search
+from riptide import VisTimeSeries, vis_ffa_search, vis_ffa_image_candidates
 
 from astropy.wcs import WCS
+from astropy.io import fits
 
+import pandas as pd
+
+from tqdm import tqdm
 
 log = logging.getLogger("riptide.worker_pool")
 
@@ -107,11 +111,13 @@ class VisWorkerPool(object):
         psf = fits.getdata(self.psf_file).squeeze()
 
         #now get the phase centre
-        header = fits.getheader(self.psf.file)
+        header = fits.getheader(self.psf_file)
         ny, nx = psf.shape
+        print(ny, nx)
         self.nx = nx
         self.ny = ny
         wcs = WCS(header)
+        wcs = wcs.dropaxis(3).dropaxis(2)
         world_coords = wcs.pixel_to_world((nx - 1)/2.0, (ny - 1)/2.0)
         self.ra_deg = world_coords.ra.deg
         self.dec_deg = world_coords.dec.deg
@@ -154,19 +160,20 @@ class VisWorkerPool(object):
         log.debug(f"Done searching DM = {dm:.3f}, peaks found: {len(allpeaks)}")
         return allpeaks
     
-    def process_uvcells(self, fname):
-
+    def process_uvcells(self, real_fname, imag_fname):
+        print("here in process_uvcells", real_fname)
         all_candidates = []
-        vis_ts = self.loader(fname)
+        vis_ts = self.loader(real_fname, imag_fname) #this should be generalised
         #get list of unique u, v pixel cell coords (indices)
-        uvcells = vis_ts.get_sparse_unique_xy()
+        vis_ts.get_sparse_unique_uv()
+        
 
         #this will set self.ra_deg, self.dec_deg, and self.psf
         self.load_psf_img(psf_img_file=self.psf_file)
         #now set the phase centre attribute of the visibility timeseries
         vis_ts.set_phase_centre(self.ra_deg, self.dec_deg)
         #now set the vis_ts.sky_coords grid by calling get_skycoords_from_psf_header
-        vis_ts.get_skycoords_from_psf_header(self.psf_header)
+        vis_ts.get_skycoords_from_psf_header(vis_ts.header)
         
         for conf in self.range_confs:
             kw_search = dict(conf["ffa_search"])
@@ -174,7 +181,7 @@ class VisWorkerPool(object):
 
             # Step 1: run vis_ffa_search for each UV cell
             uv_ffa_list = []
-            for uvcell in uvcells:
+            for uvcell in tqdm(vis_ts.unique_uv):
                 ts = vis_ts.index(uvcell)
                 ts, uv_ffa = vis_ffa_search(ts, uv_ind=uvcell, **kw_search)
                 uv_ffa_list.append(uv_ffa)
@@ -192,9 +199,9 @@ class VisWorkerPool(object):
 
             # Step 3: for each trial period index, gather all uvcell blocks and run vis_ffa_image_candidates
             uv_indices = [uv_ffa.uv_ind for uv_ffa in uv_ffa_list]
-            psf_img = vis_ts.psf
+            psf_img = self.psf
             nx, ny = (self.nx, self.ny)
-            for trial_idx in range(num_trials):
+            for trial_idx in tqdm(range(num_trials)):
                 block_periods = uv_ffa_list[0].periods[trial_idx]
                 block_foldbins = uv_ffa_list[0].foldbins[trial_idx]
 
@@ -209,28 +216,17 @@ class VisWorkerPool(object):
                     block_periods,
                     nx,
                     ny,
-                    snr_thresh=conf["candidate_search"]["snr_thresh"],
-                    max_candidates_width=conf["candidate_search"]["max_candidates"],
-                    max_candidates_all=conf["candidate_search"]["max_candidates_all"]
+                    snr_thresh=8.0,
+                    max_candidates_width=500,
+                    max_candidates_all=10000,
+                    ducy_max=0.95,
+                    wtsp=1.5, #width spacing
+                    mask_radius=2
                 )
-                    # py::dict d;
-                    # d["x"] = c.x;
-                    # d["y"] = c.y;
-                    # d["snr"] = c.snr;
-                    # d["width"] = c.width_bins;  // width in bins
-                # vis_ffa_image_candidates(
-                #                         ffa_blocks,
-                #                         uv_indices,
-                #                         psf_image,
-                #                         nx,
-                #                         ny,
-                #                         snr_thresh=8.0,
-                #                         ducy_max=0.5,
-                #                         wtsp=1.5,
-                #                         max_candidates_width=100,
-                #                         max_candidates_all=1000,
-                #                         mask_radius=2
-                #                     )
+                print(f"found {len(trial_candidates)} cands") 
+                #conf["candidate_filters"]["snr_min"],                
+                #conf["candidate_filters"]["max_candidates"],
+                #conf["candidate_filters"]["max_candidates_all"],
                 for cand in trial_candidates:
                     # cand.x, cand.y are image pixel coords
                     skycoord = vis_ts.sky_coords[cand.y, cand.x]  # lookup
