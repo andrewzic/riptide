@@ -1,4 +1,4 @@
-#include <vector>
+ #include <vector>
 #include <cmath>
 #include <algorithm>
 #include <limits>
@@ -10,13 +10,44 @@
 namespace riptide {
 
 struct Candidate {
-    size_t x;          // pixel column
-    size_t y;          // pixel row
+    size_t x;          // pixel column in full image
+    size_t y;          // pixel row in full image
     size_t width_bins; // trial width in bins
     float snr;         // signal-to-noise ratio
     float period;      // the period
+
+    std::vector<float> snr_cutout; // fixed-size cutout
+    size_t cut_nx;    // cutout width
+    size_t cut_ny;    // cutout height
 };
 
+inline std::vector<float> extract_cutout(
+    const float* image,
+    size_t nx,
+    size_t ny,
+    size_t cx,
+    size_t cy,
+    size_t cut_w,
+    size_t cut_h)
+{
+    std::vector<float> cutout(cut_w * cut_h, 0.0f);
+
+    ssize_t half_w = static_cast<ssize_t>(cut_w) / 2;
+    ssize_t half_h = static_cast<ssize_t>(cut_h) / 2;
+
+    for (size_t j = 0; j < cut_h; ++j) {
+        for (size_t i = 0; i < cut_w; ++i) {
+            ssize_t xx = static_cast<ssize_t>(cx) + i - half_w;
+            ssize_t yy = static_cast<ssize_t>(cy) + j - half_h;
+            if (xx >= 0 && yy >= 0 && xx < static_cast<ssize_t>(nx) && yy < static_cast<ssize_t>(ny)) {
+                cutout[j * cut_w + i] = image[yy * nx + xx];
+            }
+        }
+    }
+    return cutout;
+}
+
+  
 /*
  Compute snr for a single 1D phase profile.
  - arr: length nbins (float)
@@ -79,6 +110,8 @@ inline std::vector<Candidate> find_candidates_from_images_real(
 {
     const size_t img_size = nx * ny;
     const size_t total_samples = img_size * nbins;
+    const size_t CUT_W = 64;
+    const size_t CUT_H = 64;    
     float stdnoise = compute_stddev(images, total_samples);
     if (!(stdnoise > 0.f))
         throw std::invalid_argument("Estimated stdnoise <= 0");
@@ -108,7 +141,7 @@ inline std::vector<Candidate> find_candidates_from_images_real(
     for (size_t iw = 0; iw < num_widths; ++iw) {
         const size_t width_bins = widths[iw];
         float* plane = snr_cube.data() + iw * img_size;
-
+	
         while (true) {
             float best_val = snr_thresh;
             size_t best_pix = 0;
@@ -125,7 +158,16 @@ inline std::vector<Candidate> find_candidates_from_images_real(
             const size_t bx = best_pix % nx;
             const size_t by = best_pix / nx;
 
-            candidates.push_back({bx, by, width_bins, best_val, trial_period});
+            candidates.push_back({
+		bx,
+		by,
+		width_bins,
+		best_val, //snr
+		trial_period,
+		extract_cutout(plane, nx, ny, bx, by, CUT_W, CUT_H),
+		CUT_W,
+		CUT_H,
+	      });
 
             // Mask out a small region around the candidate
             for (ssize_t dy = -r; dy <= r; ++dy) {

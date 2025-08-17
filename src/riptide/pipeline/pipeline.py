@@ -440,7 +440,6 @@ class VisPipeline(object):
         # More checks are performed later when the parameters of the input
         # time series are known
         self.config = validate_pipeline_config(config)
-        self.dmiter = None
         self.worker_pool = None
         self.peaks = []
         self.clusters = []
@@ -505,14 +504,14 @@ class VisPipeline(object):
                 return dict(rng)
 
     @timing
-    def prepare(self, files):
+    def prepare(self, real_files, imag_files):
         """
         Inspect input files and select a minimal set to process
 
         files: list
         """
         log.info("Preparing pipeline")
-        log.debug("Input files: {}".format(len(files)))
+        log.debug("Input files: {}".format(len(real_files)))
         conf = self.config
 
         #ignore DM for now
@@ -542,11 +541,24 @@ class VisPipeline(object):
         self.worker_pool = VisWorkerPool(
             conf["ranges"],
             processes=conf["processes"],
-            psf_img_file=conf["psf_img_file"]
+            psf_img_file=conf["psf_img_file"],
             fmt=conf["data"]["format"],
         )
         log.info("Pipeline ready")
 
+    @timing
+    def vis_search(self, real_files, imag_files):
+        """
+        vis-search the selected file
+        """
+        log.info("Running search")
+        all_candidates = []
+        for real_file, imag_file in zip(real_files, imag_files):
+            print("here", real_file)
+            candidates = self.worker_pool.process_uvcells(real_file, imag_file)
+            all_candidates.append(candidates)
+        return all_candidates
+    
     @timing
     def search(self):
         """
@@ -776,8 +788,8 @@ class VisPipeline(object):
         log.info("Data products written")
 
     @timing
-    def process(self, files, outdir):
-        self.prepare(files)
+    def process(self, real_files, imag_files, outdir):
+        self.prepare(real_files, imag_files)
         self.search()
         self.cluster_peaks()
         self.flag_harmonics()

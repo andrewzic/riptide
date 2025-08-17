@@ -13,7 +13,7 @@ def strictly_positive(x):
     return x > 0
 
 
-VALID_FORMATS = ("presto", "sigproc")
+VALID_FORMATS = ("presto", "sigproc", "uv")
 
 
 SEARCH_RANGE_SCHEMA = Schema(
@@ -102,6 +102,7 @@ PIPELINE_CONFIG_SCHEMA = Schema(
                 error="nchans must be a number > 0 or null/blank",
             ),
         },
+        "psf_img_file": Or(str, None, error="psf_img_file must be provided"),
         "dmselect": {
             "min": Or(
                 Use(float), None, error="Minimum DM must be a number or null/blank"
@@ -166,6 +167,16 @@ PIPELINE_CONFIG_SCHEMA = Schema(
                 None,
                 error="Candidate max_number must be an int > 0 or null/blank",
             ),
+            "max_candidates": Or(
+                And(int, strictly_positive),
+                None,
+                error="Candidate max_candidates must be an int > 0 or null/blank",
+            ),
+            "max_candidates_all": Or(
+                And(int, strictly_positive),
+                None,
+                error="Candidate max_candidates_all must be an int > 0 or null/blank",
+            ),                        
         },
         "plot_candidates": Schema(bool, error="plot_candidates must be a boolean"),
     }
