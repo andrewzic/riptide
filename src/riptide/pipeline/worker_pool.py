@@ -248,5 +248,5 @@ class VisWorkerPool(object):
                         "skycoord": skycoord
                     })
         df_candidates = pd.DataFrame(all_candidates)
-
+        self.candidates = df_candidates
         return df_candidates
