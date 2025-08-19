@@ -141,11 +141,11 @@ class UV_FFA(object):
     
     @property
     def u(self):
-        return uv_inds[0]
+        return self.uv_ind[0]
     
     @property
     def v(self):
-        return uv_inds[1]
+        return self.uv_ind[1]
 
     @property
     def tobs(self):
@@ -154,7 +154,7 @@ class UV_FFA(object):
 
     def to_dict(self):
         return {
-            "uv_ind": uv_ind,
+            "uv_ind": self.uv_ind,
             "periods": self.periods,
             "foldbins": self.foldbins,
             "base_periods": self.base_periods,
@@ -213,11 +213,11 @@ class UV_FFA_basep(object):
     
     @property
     def u(self):
-        return uv_inds[:, 0]
+        return self.uv_inds[:, 0]
     
     @property
     def v(self):
-        return uv_inds[:, 1]
+        return self.uv_inds[:, 1]
 
     @property
     def tobs(self):

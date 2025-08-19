@@ -3,7 +3,7 @@ import numpy as np
 ### Local module imports
 import riptide.libcpp as libcpp
 from .ffautils import generate_width_trials
-from .periodogram import Periodogram, UV_FFA
+from .periodogram import Periodogram, UV_FFA, UV_FFA_basep
 from .timing import timing
 
 @timing

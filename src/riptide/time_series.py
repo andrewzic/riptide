@@ -786,7 +786,7 @@ class VisTimeSeries(object):
             tsamp = float(header[f"CDELT{fits_idx}"])
             cubedata = np.nan_to_num(hdul[0].data.squeeze(), nan=0.0, posinf=0.0, neginf=0.0)
         
-        return cls(cubedata, tsamp, dtype=sparse_grid.dtype, nu=nu, nv=nv, du=du, dv=dv)
+        return cls(cubedata, tsamp, dtype=cubedata.dtype, nu=nu, nv=nv, du=du, dv=dv)
 
     @classmethod
     def from_sparse_npz(cls, cube_file):

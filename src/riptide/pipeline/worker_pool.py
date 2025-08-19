@@ -1,13 +1,14 @@
 import logging
 import multiprocessing
 
-from riptide import TimeSeries, ffa_plan, ffa_search, find_peaks
-from riptide import VisTimeSeries, vis_ffa_search, vis_ffa_image_candidates
+from riptide import TimeSeries, plan_ffa, ffa_search, find_peaks
+from riptide import VisTimeSeries, vis_ffa_search, vis_ffa_search_basep, vis_ffa_image_candidates
 
 from astropy.wcs import WCS
 from astropy.io import fits
 
 import pandas as pd
+import numpy as np
 
 from tqdm import tqdm
 
@@ -260,6 +261,8 @@ class VisWorkerPool(object):
         #now set the vis_ts.sky_coords grid by calling get_skycoords_from_psf_header
         vis_ts.get_skycoords_from_psf_header(vis_ts.header)
         nsamp = vis_ts.nsamp
+        skycoord = vis_ts.sky_coords[cand.y, cand.x]  # lookup
+
 
         #one-off loop to densify the sparse cube
         dense_uv_ts = []
@@ -267,6 +270,8 @@ class VisWorkerPool(object):
             ts_np = vis_ts.index_np(uvcell)
             dense_uv_ts.append(ts_np)
         dense_uv_ts = np.array(dense_uv_ts)
+
+        trial_idx_ctr = 0
 
         for conf in self.range_confs:
             kw_search = dict(conf["ffa_search"])
@@ -300,7 +305,7 @@ class VisWorkerPool(object):
                 # and the uv-cells to c++, and get it to process the lot with a single base period etc
                 # for loops in python = bad
                 print(f"doing FFA transform on {len(vis_ts.uv)}")
-                uv_ffa = vis_ffa_search_basep(dense_uv_ts, base_period=bins, vis_ts.unique_uv, tau)
+                uv_ffa = vis_ffa_search_basep(dense_uv_ts, bins, vis_ts.unique_uv, tau)
                 # uv_ffa_list.append(uv_ffa)
 
                 ffa_cube = uv_ffa.ffa_array
@@ -330,9 +335,8 @@ class VisWorkerPool(object):
 
                 for cand in trial_candidates:
                     # cand.x, cand.y are image pixel coords
-                    skycoord = vis_ts.sky_coords[cand.y, cand.x]  # lookup
                     all_candidates.append({
-                        "trial_idx": trial_idx,
+                        "trial_idx": trial_idx_ctr,
                         "base_period": base_period,
                         "tsamp": tsamp,
                         "x_pix": cand["x"],
@@ -344,6 +348,7 @@ class VisWorkerPool(object):
                         "dec_deg": skycoord.dec.deg,
                         "skycoord": skycoord
                     })
+                    trial_idx_ctr += 1
         df_candidates = pd.DataFrame(all_candidates)
         self.candidates = df_candidates
         return df_candidates
