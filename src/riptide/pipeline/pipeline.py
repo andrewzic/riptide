@@ -559,6 +559,18 @@ class VisPipeline(object):
         return all_candidates
     
     @timing
+    def vis_search_candidates(self, real_files, imag_files):
+        """
+        vis-search the selected file
+        """
+        log.info("Running search")
+        all_candidates = []
+        for real_file, imag_file in zip(real_files, imag_files):
+            candidates = self.worker_pool.process_uvcells(real_file, imag_file)
+            all_candidates.append(candidates)
+        return all_candidates
+    
+    @timing
     def search(self):
         """
         Search all selected files
