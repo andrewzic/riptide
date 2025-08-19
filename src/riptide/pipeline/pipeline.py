@@ -554,7 +554,6 @@ class VisPipeline(object):
         log.info("Running search")
         all_candidates = []
         for real_file, imag_file in zip(real_files, imag_files):
-            print("here", real_file)
             candidates = self.worker_pool.process_uvcells(real_file, imag_file)
             all_candidates.append(candidates)
         return all_candidates

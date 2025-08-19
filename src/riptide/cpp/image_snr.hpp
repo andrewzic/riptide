@@ -96,7 +96,7 @@ Inputs:
 Returns:
  - std::vector<Candidate> sorted by descending snr (truncated to max_candidates)
 */
-inline std::vector<Candidate> find_candidates_from_images_real(
+inline std::vector<Candidate> find_image_candidates(
     const float* __restrict__ images,
     size_t nx,
     size_t ny,
@@ -106,42 +106,46 @@ inline std::vector<Candidate> find_candidates_from_images_real(
     float trial_period,
     float snr_thresh = 8.0f,
     size_t max_candidates = 100,
-    size_t mask_radius = 2)
+    size_t mask_radius = 2,
+    size_t cut_w = 64,
+    size_t cut_h = 64)
 {
     const size_t img_size = nx * ny;
     const size_t total_samples = img_size * nbins;
-    const size_t CUT_W = 64;
-    const size_t CUT_H = 64;    
+
     float stdnoise = compute_stddev(images, total_samples);
     if (!(stdnoise > 0.f))
         throw std::invalid_argument("Estimated stdnoise <= 0");
-
-    std::vector<float> snr_cube(num_widths * img_size);
-    std::vector<float> profile(nbins);
-    std::vector<float> tmp_snr(num_widths);
-    std::vector<float> cpfsum(nbins + *std::max_element(widths, widths + num_widths));
-
-    // Compute SNR cube
-    for (size_t y = 0; y < ny; ++y) {
-        for (size_t x = 0; x < nx; ++x) {
-            size_t pix_idx = y * nx + x;
-            for (size_t p = 0; p < nbins; ++p)
-                profile[p] = images[p * img_size + pix_idx];
-            snr1(profile.data(), nbins, widths, num_widths, stdnoise, tmp_snr.data(), cpfsum.data());
-            for (size_t iw = 0; iw < num_widths; ++iw)
-                snr_cube[iw * img_size + pix_idx] = tmp_snr[iw];
-        }
-    }
 
     std::vector<Candidate> candidates;
     const float NEG_INF = -std::numeric_limits<float>::max();
     const ssize_t r = static_cast<ssize_t>(mask_radius);
 
-    // Search for candidates
+    // temporary buffers reused for each pixel
+    std::vector<float> profile(nbins);
+    std::vector<float> cpfsum(nbins + *std::max_element(widths, widths + num_widths));
+    std::vector<float> tmp_snr(num_widths);
+
+    // --- process one width at a time ---
     for (size_t iw = 0; iw < num_widths; ++iw) {
         const size_t width_bins = widths[iw];
-        float* plane = snr_cube.data() + iw * img_size;
-	
+        if (width_bins >= nbins) continue; // invalid, skip
+
+        // make one SNR plane for this width
+        std::vector<float> plane(img_size);
+
+        for (size_t y = 0; y < ny; ++y) {
+            for (size_t x = 0; x < nx; ++x) {
+                size_t pix_idx = y * nx + x;
+                for (size_t p = 0; p < nbins; ++p)
+                    profile[p] = images[p * img_size + pix_idx];
+                snr1(profile.data(), nbins, &width_bins, 1,
+                     stdnoise, tmp_snr.data(), cpfsum.data());
+                plane[pix_idx] = tmp_snr[0];
+            }
+        }
+
+        // --- candidate search on this width plane ---
         while (true) {
             float best_val = snr_thresh;
             size_t best_pix = 0;
@@ -159,15 +163,15 @@ inline std::vector<Candidate> find_candidates_from_images_real(
             const size_t by = best_pix / nx;
 
             candidates.push_back({
-		bx,
-		by,
-		width_bins,
-		best_val, //snr
-		trial_period,
-		extract_cutout(plane, nx, ny, bx, by, CUT_W, CUT_H),
-		CUT_W,
-		CUT_H,
-	      });
+                bx,
+                by,
+                width_bins,
+                best_val, // snr
+                trial_period,
+                extract_cutout(plane.data(), nx, ny, bx, by, cut_w, cut_h),
+                cut_w,
+                cut_h,
+            });
 
             // Mask out a small region around the candidate
             for (ssize_t dy = -r; dy <= r; ++dy) {
@@ -194,5 +198,5 @@ inline std::vector<Candidate> find_candidates_from_images_real(
 
     return candidates;
 }
-
+  
 } // namespace riptide

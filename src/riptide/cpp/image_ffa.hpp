@@ -214,7 +214,7 @@ public:
             // );
 
             // new: handle per-width candidate lists returned by the current image_snr.hpp
-            auto candidates_per_width = find_candidates_from_images_real(
+            auto candidates_per_width = find_image_candidates(
                 all_phase_imgs.data(),
                 nx, ny,
                 cols, // nbins = cols

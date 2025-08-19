@@ -497,10 +497,10 @@ class VisTimeSeries(object):
         return copy.deepcopy(self)
 
     def get_sparse_unique_uv(self):
-        _, x_coords, y_coords = self.data.coords
-        xy_coords = np.stack([x_coords, y_coords], axis=1)
-        unique_xy = np.unique(xy_coords, axis=0)
-        self.unique_uv = unique_xy
+        proj = self.data.sum(axis=0)
+        x_coords, y_coords = proj.coords
+        self.unique_uv = np.column_stack([x_coords, y_coords])
+        del proj
 
     def set_grid_params(self, nu, nv, du, dv):
         """
@@ -787,6 +787,10 @@ class VisTimeSeries(object):
             cubedata = np.nan_to_num(hdul[0].data.squeeze(), nan=0.0, posinf=0.0, neginf=0.0)
         
         return cls(cubedata, tsamp, dtype=sparse_grid.dtype, nu=nu, nv=nv, du=du, dv=dv)
+
+    @classmethod
+    def from_sparse_npz(cls, cube_file):
+        raise NotImplementedError("from_sparse_npz is not implemented yet....")
 
     @classmethod
     def from_numpy_array(cls, array, tsamp, copy=False):
