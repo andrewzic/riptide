@@ -1,7 +1,7 @@
 import logging
 import multiprocessing
 
-from riptide import TimeSeries, ffa_search, find_peaks
+from riptide import TimeSeries, ffa_plan, ffa_search, find_peaks
 from riptide import VisTimeSeries, vis_ffa_search, vis_ffa_image_candidates
 
 from astropy.wcs import WCS
@@ -113,7 +113,6 @@ class VisWorkerPool(object):
         #now get the phase centre
         header = fits.getheader(self.psf_file)
         ny, nx = psf.shape
-        print(ny, nx)
         self.nx = nx
         self.ny = ny
         wcs = WCS(header)
@@ -186,7 +185,6 @@ class VisWorkerPool(object):
                 ts, uv_ffa = vis_ffa_search(ts, uv_ind=uvcell, **kw_search)
                 uv_ffa_list.append(uv_ffa)
 
-
             # periods = uv_ffa_list[0].periods #sum(nrow) for nrow in ffa_blocks) elements
             # foldbins = uv_ffa_list[0].foldbins #sum(nrow) for nrow in ffa_blocks) elements
             base_periods = uv_ffa_list[0].base_periods  #len(ffa_blocks) elements
@@ -227,6 +225,109 @@ class VisWorkerPool(object):
                 #conf["candidate_filters"]["snr_min"],                
                 #conf["candidate_filters"]["max_candidates"],
                 #conf["candidate_filters"]["max_candidates_all"],
+                for cand in trial_candidates:
+                    # cand.x, cand.y are image pixel coords
+                    skycoord = vis_ts.sky_coords[cand.y, cand.x]  # lookup
+                    all_candidates.append({
+                        "trial_idx": trial_idx,
+                        "base_period": base_period,
+                        "tsamp": tsamp,
+                        "x_pix": cand["x"],
+                        "y_pix": cand["y"],
+                        "snr": cand["snr"],
+                        "period": cand["period"],
+                        "width_bins": cand["width"],
+                        "ra_deg": skycoord.ra.deg,
+                        "dec_deg": skycoord.dec.deg,
+                        "skycoord": skycoord
+                    })
+        df_candidates = pd.DataFrame(all_candidates)
+        self.candidates = df_candidates
+        return df_candidates
+    
+    def process_uvcells_basep(self, real_fname, imag_fname):
+        print("here in process_uvcells", real_fname)
+        all_candidates = []
+        vis_ts = self.loader(real_fname, imag_fname) #this should be generalised
+        #get list of unique u, v pixel cell coords (indices)
+        vis_ts.get_sparse_unique_uv()
+        
+
+        #this will set self.ra_deg, self.dec_deg, and self.psf
+        self.load_psf_img(psf_img_file=self.psf_file)
+        #now set the phase centre attribute of the visibility timeseries
+        vis_ts.set_phase_centre(self.ra_deg, self.dec_deg)
+        #now set the vis_ts.sky_coords grid by calling get_skycoords_from_psf_header
+        vis_ts.get_skycoords_from_psf_header(vis_ts.header)
+        nsamp = vis_ts.nsamp
+
+        #one-off loop to densify the sparse cube
+        dense_uv_ts = []
+        for uvcell in tqdm(vis_ts.unique_uv):
+            ts_np = vis_ts.index_np(uvcell)
+            dense_uv_ts.append(ts_np)
+        dense_uv_ts = np.array(dense_uv_ts)
+
+        for conf in self.range_confs:
+            kw_search = dict(conf["ffa_search"])
+            kw_search.update({"deredden": False, "already_normalised": True})
+
+            period_min = kw_search["period_min"]
+            period_max = kw_search["period_max"]
+            bins_min = kw_search["bins_min"]
+            bins_max = kw_search["bins_max"]  
+            wtsp = kw_search["wtsp"]
+            ffa_plans = plan_ffa(nsamp, tsamp, period_min, period_max, bins_min, bins_max)      
+            # ffa_plan : list of dict
+            # Each dict contains:
+            #     - 'downsample_factor'
+            #     - 'tau' (effective sample time)
+            #     - 'bins'
+            #     - 'base_period' (tau*bins)
+            #     - 'rows_eval' (rows used in FFA transform)    
+
+
+            for ffa_plan in ffa_plans:
+                downsample_fac = ffa_plan["downsample_factor"]
+                tau = ffa_plan["tau"]
+                base_period = ffa_plan["base_period"]
+                bins = ffa_plan["bins"]
+                rows_eval = ffa_plan["rows_eval"]
+
+
+                # Step 1: run vis_ffa_search for each UV cell
+                # would like this to work by just passing a dense representation of the data, 
+                # and the uv-cells to c++, and get it to process the lot with a single base period etc
+                # for loops in python = bad
+                print(f"doing FFA transform on {len(vis_ts.uv)}")
+                uv_ffa = vis_ffa_search_basep(dense_uv_ts, base_period=bins, vis_ts.unique_uv, tau)
+                # uv_ffa_list.append(uv_ffa)
+
+                ffa_cube = uv_ffa.ffa_array
+                psf_img = self.psf
+                nx, ny = (self.nx, self.ny)
+                block_periods = uv_ffa.periods
+                block_foldbins = uv_ffa.foldbins
+
+                base_period = uv_ffa.base_period
+                tsamp = uv_ffa.tsamp
+
+                trial_candidates = vis_ffa_image_candidates(
+                    ffa_cube,
+                    vis_ts.unique_uv,
+                    psf_img,
+                    block_periods,
+                    nx,
+                    ny,
+                    snr_thresh=8.0,
+                    max_candidates_width=500,
+                    max_candidates_all=10000,
+                    ducy_max=0.5,
+                    wtsp=1.5, #width spacing
+                    mask_radius=2
+                )
+                print(f"found {len(trial_candidates)} cands") 
+
                 for cand in trial_candidates:
                     # cand.x, cand.y are image pixel coords
                     skycoord = vis_ts.sky_coords[cand.y, cand.x]  # lookup

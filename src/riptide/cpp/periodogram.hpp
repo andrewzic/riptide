@@ -347,6 +347,55 @@ void vis_ffa_transform(
         }
     }
 
-} // namespace riptide
+/**
+ * Perform FFA transform on all UV-cell time series at a given base period (bins).
+ *
+ * @param vis_data   Pointer to dense array of shape (N_uv, nsamp) stored row-major.
+ *                   Each row is a time series for one UV cell.
+ * @param N_uv       Number of UV cells (first dimension).
+ * @param nsamp      Number of time samples (second dimension).
+ * @param bins       Number of bins (base period folding factor).
+ * @param out        Output buffer (N_uv * rows * bins). Caller allocates.
+ *                   The output for UV cell i is stored at offset i * (rows * bins).
+ */
+void vis_ffa_transform_basep(
+    const std::complex<float>* __restrict__ vis_data,
+    size_t N_uv,
+    size_t nsamp,
+    size_t bins,
+    double tsamp,
+    std::complex<float>* __restrict__ out,
+    std::vector<double>& periods_out
+) {
+    // Number of rows in folding matrix
+    const size_t rows = nsamp / bins;
+    if (rows < 2) {
+        throw std::runtime_error("vis_ffa_transform_basep: not enough rows for given bins.");
+    }
+
+    // Compute periods vector (same for all uv-cells)
+    periods_out.resize(rows);
+    double tau = tsamp;  // current sampling time (no downsampling in this basep mode)
+    for (size_t s = 0; s < rows; ++s) {
+        periods_out[s] = tau * bins * bins / (bins - s / (rows - 1.0));
+    }
+
+    // Temporary buffers for single-series transform
+    std::vector<std::complex<float>> ffabuf(rows * bins);
+    std::vector<std::complex<float>> ffaout(rows * bins);
+
+    // Iterate over all UV cells
+    for (size_t iuv = 0; iuv < N_uv; ++iuv) {
+        // Pointer to this UV cell's time series
+        const std::complex<float>* ts = vis_data + iuv * nsamp;
+
+        // Run FFA transform for this UV cell
+        transform(ts, rows, bins, ffabuf.data(), ffaout.data());
+
+        // Copy result into output cube at correct offset
+        std::complex<float>* out_ptr = out + iuv * rows * bins;
+        std::copy(ffaout.begin(), ffaout.end(), out_ptr);
+    }
+}
 
 #endif // PERIODOGRAM_HPP

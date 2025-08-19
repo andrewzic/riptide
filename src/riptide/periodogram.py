@@ -174,3 +174,52 @@ class UV_FFA(object):
             items["ffas"],
             metadata=items["metadata"],
         )
+    
+
+class UV_FFA_basep(object):
+    """
+    Stores the raw output of the FFA search of a time series.
+
+    Attributes
+    ----------
+    uv_ind : tuple (or similar)
+            Simple tuple to indicate the relevant grid cell (indexes, not sky-bsed)
+
+    periods : ndarray
+        Sequence of trial periods in seconds
+
+    foldbins : ndarray
+        Sequence with the same length as `periods`, containing the exact number of phase bins with
+        which the data were folded for each particular trial period.
+
+    snrs : ndarray
+        Two dimensional array with shape (num_periods, num_widths) containing the S/N as a function
+        of trial pulse width and period.
+    """
+
+    def __init__(self, uv_inds, periods, foldbins, base_period, tsamp, ffa_array, metadata=None):
+        self.uv_inds = uv_inds
+        self.periods = periods
+        self.foldbins = foldbins
+        self.base_period = base_period
+        self.tsamp = tsamp
+        self.ffa_array = ffa_array
+        self.metadata = metadata if metadata is not None else Metadata({})
+
+    @property
+    def freqs(self):
+        """Sequence of trial frequencies in Hz, in **decreasing** order"""
+        return 1.0 / self.periods
+    
+    @property
+    def u(self):
+        return uv_inds[:, 0]
+    
+    @property
+    def v(self):
+        return uv_inds[:, 1]
+
+    @property
+    def tobs(self):
+        """Length in seconds of the TimeSeries that was searched"""
+        return self.metadata["tobs"]

@@ -757,7 +757,7 @@ class VisTimeSeries(object):
             nv = header["NAXIS2"]
             du = header["CDELT1"]
             dv = header["CDELT2"]
-            ctype = "TIME"
+            ctype = "TIME" #hard coded
             fits_idx = wcs.axis_type_names.index(ctype) + 1
             tsamp = float(header[f"CDELT{fits_idx}"])
             print(real_hdul[0])
@@ -855,87 +855,6 @@ class VisTimeSeries(object):
         data = np.load(fname)
         return cls(data, tsamp, copy=False)
 
-    @classmethod
-    @timing
-    def from_presto_inf(cls, fname):
-        """Create a new TimeSeries from a .inf file written by PRESTO. The
-        associated .dat file must be in the same directory.
-
-        Parameters
-        ----------
-        fname : str
-            File name to load.
-
-        Returns
-        -------
-        out: TimeSeries
-            TimeSeries object.
-        """
-        inf = PrestoInf(fname)
-        metadata = Metadata.from_presto_inf(inf)
-        # TODO: check that the number of samples read from the .inf file
-        # matches what is actually in the .dat file, although the possibility of
-        # 'data breaks' could make this difficult
-        ts = cls(inf.load_data(), tsamp=inf["tsamp"], metadata=metadata)
-
-        em_band = ts.metadata["em_band"]
-        if em_band in ("X-ray", "Gamma"):
-            msg = (
-                f" You have loaded file {fname!r}, which contains data observed at"
-                f" a high-energy band {em_band!r}."
-                " riptide is NOT designed to process low photon count time series,"
-                " i.e. where the background noise statistics are non-Gaussian."
-                " Be VERY careful when interpreting any search outputs."
-            )
-            warnings.warn(msg, category=UserWarning)
-        return ts
-
-    @classmethod
-    @timing
-    def from_sigproc(cls, fname, extra_keys={}):
-        """Create a new TimeSeries from a file written by SIGPROC's dedisperse
-        routine.
-
-        Parameters
-        ----------
-        fname : str
-            File name to load.
-        extra_keys : dict, optional
-            Optional {key: type} dictionary. Use it to specify how to parse any
-            non-standard keys that could be found in the header, or even to
-            override the data type of standard keys.
-
-            Example:
-                {
-                'telescope_diameter' : float,
-                'num_trusses': int,
-                'planet_name': str
-                }
-
-        Returns
-        -------
-        out : TimeSeries
-            TimeSeries object.
-        """
-        sig = SigprocHeader(fname, extra_keys=extra_keys)
-
-        # This call checks if the file contains a dedispersed time series
-        # in either 8-bit or 32-bit format
-        # For 8-bit data, the signedness is specified via the 'signed' boolean key
-        metadata = Metadata.from_sigproc(sig, extra_keys=extra_keys)
-
-        # Load time series data
-        with open(fname, "rb") as fobj:
-            fobj.seek(sig.bytesize)
-            if metadata["nbits"] == 8:
-                dtype = np.int8 if metadata["signed"] else np.uint8
-                # Don't forget to cast to float32 after reading !
-                data = np.fromfile(fobj, dtype=dtype).astype(np.float32)
-            else:  # assume float32
-                data = np.fromfile(fobj, dtype=np.float32)
-
-        return cls(data, tsamp=sig["tsamp"], metadata=metadata)
-
     @property
     def nsamp(self):
         """Number of samples in the data."""
@@ -984,3 +903,7 @@ class VisTimeSeries(object):
             }, 
             dtype=np.complex64
         )
+    
+    def index_np(self, ind):
+        """grabs one index of multi dimensional array and returns TimeSeries object for 1D ts data"""
+        return self.data[:, *ind].todense()
