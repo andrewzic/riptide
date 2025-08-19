@@ -95,6 +95,54 @@ def vis_ffa_search(
     return tseries, ffa_result
 
 @timing
+def vis_ffa_search_basep(
+    dynamic_grid_array,
+    base_period, #in bins
+    uv_inds,
+    tsamp
+):  
+    """
+    Run a FFA search of a multiple visibility timeseries to produce ffa blocks for a given base period
+
+    Parameters
+    ----------
+    vis_data : np array
+        The dense visibility time series array to search - should be N_uv x N_t
+    base_period:
+        The (integer) base period to fold at in bins
+
+    Returns
+    -------
+    ts : TimeSeries
+        The de-reddened and normalised time series that was actually searched
+    ffa_result : UV_FFA
+        The output of the search, which contains among other things a list of 2D arrays
+        the input visibilities folded at different base periods
+    """
+    ### Prepare data: deredden then normalise IN THAT ORDER
+    #shouldn't do this on visibility data hence deredden = False and already_normalised = True by default
+
+    #below is akin to periodogram but preserves pulse phase information, 
+    # keeping FFA results in butterfly blocks
+    ffa_grid_array, periods = libcpp.vis_ffa_transform_basep(
+        dynamic_grid_array, base_period, tsamp
+    )
+
+    foldbins = np.array([base_period for p in periods])
+
+    # def __init__(self, uv_inds, periods, foldbins, base_period, tsamp, ffa_array, metadata=None):
+    #     self.uv_inds = uv_inds
+    #     self.periods = periods
+    #     self.foldbins = foldbins
+    #     self.base_periods = base_period
+    #     self.tsamps = tsamp
+    #     self.ffa_array = ffa_array
+
+    ffa_result = UV_FFA_basep(uv_inds, periods, foldbins, base_period, tsamp, ffa_grid_array)
+    return ffa_result
+
+
+@timing
 def vis_ffa_image_candidates(
     ffa_blocks,
     uv_indices,

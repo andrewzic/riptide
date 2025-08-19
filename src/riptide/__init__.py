@@ -12,6 +12,8 @@ from .candidate import Candidate
 from .search import ffa_search
 from .vis_search import vis_ffa_search, vis_ffa_image_candidates
 from .running_medians import running_median, fast_running_median
+from .ffautils import plan_ffa
+
 
 from .libffa import ffa1, ffa2, ffafreq, ffaprd, generate_signal, downsample, complex_downsample, boxcar_snr
 
@@ -27,6 +29,7 @@ __all__ = [
     "UV_FFA",
     "Metadata",
     "Candidate",
+    "plan_ffa",
     "ffa_search",
     "vis_ffa_search",
     "vis_ffa_image_candidates",
