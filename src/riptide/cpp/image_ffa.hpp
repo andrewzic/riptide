@@ -227,7 +227,7 @@ public:
             );
 
             // flatten into a single vector
-            all_candidates.insert(all_candidates.end(), vec.begin(), vec.end());
+            all_candidates.insert(all_candidates.end(), candidates_per_width.begin(), candidates_per_width.end());
             // for (size_t iw = 0; iw < candidates_per_width.size(); ++iw) {
             //     const auto &vec = candidates_per_width[iw];
             //     all_candidates.insert(all_candidates.end(), vec.begin(), vec.end());
