@@ -228,7 +228,7 @@ class VisWorkerPool(object):
                 #conf["candidate_filters"]["max_candidates_all"],
                 for cand in trial_candidates:
                     # cand.x, cand.y are image pixel coords
-                    skycoord = vis_ts.sky_coords[cand.y, cand.x]  # lookup
+                    skycoord = sky_coords[cand.y, cand.x]  # lookup
                     all_candidates.append({
                         "trial_idx": trial_idx,
                         "base_period": base_period,
@@ -261,7 +261,7 @@ class VisWorkerPool(object):
         #now set the vis_ts.sky_coords grid by calling get_skycoords_from_psf_header
         vis_ts.get_skycoords_from_psf_header(vis_ts.header)
         nsamp = vis_ts.nsamp
-        skycoord = vis_ts.sky_coords[cand.y, cand.x]  # lookup
+        skycoords = vis_ts.sky_coords
 
 
         #one-off loop to densify the sparse cube
