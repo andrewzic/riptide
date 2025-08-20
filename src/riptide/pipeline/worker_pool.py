@@ -339,7 +339,7 @@ class VisWorkerPool(object):
 
                 for cand in trial_candidates:
                     # cand.x, cand.y are image pixel coords
-                    skycoord = sky_coords[cand.y, cand.x]  # lookup coord
+                    skycoord = skycoords[cand.y, cand.x]  # lookup coord
                     all_candidates.append({
                         "trial_idx": trial_idx_ctr,
                         "base_period": base_period,
