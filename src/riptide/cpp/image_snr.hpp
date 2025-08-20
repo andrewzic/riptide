@@ -27,20 +27,20 @@ inline std::vector<float> extract_cutout(
     size_t ny,
     size_t cx,
     size_t cy,
-    size_t cut_w,
-    size_t cut_h)
+    size_t cut_nx,
+    size_t cut_ny)
 {
-    std::vector<float> cutout(cut_w * cut_h, 0.0f);
+    std::vector<float> cutout(cut_nx * cut_ny, 0.0f);
 
-    ssize_t half_w = static_cast<ssize_t>(cut_w) / 2;
-    ssize_t half_h = static_cast<ssize_t>(cut_h) / 2;
+    ssize_t half_w = static_cast<ssize_t>(cut_nx) / 2;
+    ssize_t half_h = static_cast<ssize_t>(cut_ny) / 2;
 
-    for (size_t j = 0; j < cut_h; ++j) {
-        for (size_t i = 0; i < cut_w; ++i) {
+    for (size_t j = 0; j < cut_ny; ++j) {
+        for (size_t i = 0; i < cut_nx; ++i) {
             ssize_t xx = static_cast<ssize_t>(cx) + i - half_w;
             ssize_t yy = static_cast<ssize_t>(cy) + j - half_h;
             if (xx >= 0 && yy >= 0 && xx < static_cast<ssize_t>(nx) && yy < static_cast<ssize_t>(ny)) {
-                cutout[j * cut_w + i] = image[yy * nx + xx];
+                cutout[j * cut_nx + i] = image[yy * nx + xx];
             }
         }
     }
@@ -107,8 +107,8 @@ inline std::vector<Candidate> find_image_candidates(
     float snr_thresh = 8.0f,
     size_t max_candidates = 100,
     size_t mask_radius = 2,
-    size_t cut_w = 64,
-    size_t cut_h = 64)
+    size_t cut_nx = 64,
+    size_t cut_ny = 64)
 {
     const size_t img_size = nx * ny;
     const size_t total_samples = img_size * nbins;
@@ -168,9 +168,9 @@ inline std::vector<Candidate> find_image_candidates(
                 width_bins,
                 best_val, // snr
                 trial_period,
-                extract_cutout(plane.data(), nx, ny, bx, by, cut_w, cut_h),
-                cut_w,
-                cut_h,
+                extract_cutout(plane.data(), nx, ny, bx, by, cut_nx, cut_ny),
+                cut_nx,
+                cut_ny,
             });
 
             // Mask out a small region around the candidate

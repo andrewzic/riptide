@@ -489,7 +489,7 @@ py::list image_ffa_candidates(
         d["width"] = c.width_bins;
         d["period"] = c.period;
         // convert cutout back to numpy
-        py::array_t<float> cutout({c.cut_h, c.cut_w});
+        py::array_t<float> cutout({c.cut_ny, c.cut_nx});
         std::memcpy(cutout.mutable_data(), c.cutout.data(), c.cutout.size() * sizeof(float));
         d["cutout"] = cutout;   
         py_cands.append(d);
