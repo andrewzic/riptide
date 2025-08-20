@@ -495,12 +495,13 @@ class VisTimeSeries(object):
     def copy(self):
         """Returns a new copy of the TimeSeries"""
         return copy.deepcopy(self)
-
+    
     def get_sparse_unique_uv(self):
-        proj = self.data.sum(axis=0)
-        x_coords, y_coords = proj.coords
-        self.unique_uv = np.column_stack([x_coords, y_coords])
-        del proj
+        # Take the max along the time axis (axis=2) to find any uv with nonzero timeseries
+        uv_mask = self.data.max(axis=2) != 0  # shape (U, V)
+        
+        u_coords, v_coords = uv_mask.coords
+        self.unique_uv = np.column_stack([u_coords, v_coords])
 
     def set_grid_params(self, nu, nv, du, dv):
         """

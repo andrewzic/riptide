@@ -265,11 +265,15 @@ class VisWorkerPool(object):
 
 
         #one-off loop to densify the sparse cube
-        dense_uv_ts = []
-        for uvcell in tqdm(vis_ts.unique_uv):
-            ts_np = vis_ts.index_np(uvcell)
-            dense_uv_ts.append(ts_np)
-        dense_uv_ts = np.array(dense_uv_ts)
+        uv_mask = vis_ts.data.max(axis=2) != 0  # shape (U, V)
+        u_coords, v_coords = uv_mask.coords  # 1D arrays of active indices
+        dense_uv_ts = vis_ts.data[u_coords, v_coords, :].todense()
+
+        # dense_uv_ts = []
+        # for uvcell in tqdm(vis_ts.unique_uv):
+        #     ts_np = vis_ts.index_np(uvcell)
+        #     dense_uv_ts.append(ts_np)
+        # dense_uv_ts = np.array(dense_uv_ts)
 
         trial_idx_ctr = 0
 
