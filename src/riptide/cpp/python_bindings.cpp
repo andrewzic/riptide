@@ -385,7 +385,7 @@ vis_ffa_transform_basep(
 
     // Wrap periods into NumPy array
     py::array_t<double> periods_array(ssize_t(rows), periods.data());
-    
+
     return std::make_tuple(out_array, periods_array);
 }
 
@@ -580,11 +580,11 @@ PYBIND11_MODULE(libcpp, m)
         "Compute the FFA transforms of a complex visibility time series. Returns a 3-tuple of arrays: trial periods, number of phase bins, list of FFA transforms"
     );
 
-    // m.def(
-    //     "vis_ffa_transform_basep", &vis_ffa_transform_basep,
-    //     py::arg("vis_data"), py::arg("bins"), py::arg("tsamp"),
-    //     "Compute the FFA transform of a block of visibilities (a DGA) for a single base period. Returns a FFA-transformed DGA"
-    // );
+    m.def(
+        "vis_ffa_transform_basep", &vis_ffa_transform_basep,
+        py::arg("vis_data"), py::arg("bins"), py::arg("tsamp"),
+        "Compute the FFA transform of a block of visibilities (a DGA) for a single base period. Returns a FFA-transformed DGA"
+    );
 
     m.def(
         "image_ffa_candidates", &image_ffa_candidates,
