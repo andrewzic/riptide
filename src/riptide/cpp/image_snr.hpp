@@ -16,7 +16,7 @@ struct Candidate {
     float snr;         // signal-to-noise ratio
     float period;      // the period
 
-    std::vector<float> snr_cutout; // fixed-size cutout
+    std::vector<float> cutout; // fixed-size cutout
     size_t cut_nx;    // cutout width
     size_t cut_ny;    // cutout height
 };
