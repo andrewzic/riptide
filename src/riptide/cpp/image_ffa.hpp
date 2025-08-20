@@ -227,10 +227,11 @@ public:
             );
 
             // flatten into a single vector
-            for (size_t iw = 0; iw < candidates_per_width.size(); ++iw) {
-                const auto &vec = candidates_per_width[iw];
-                all_candidates.insert(all_candidates.end(), vec.begin(), vec.end());
-            }
+            all_candidates.insert(all_candidates.end(), vec.begin(), vec.end());
+            // for (size_t iw = 0; iw < candidates_per_width.size(); ++iw) {
+            //     const auto &vec = candidates_per_width[iw];
+            //     all_candidates.insert(all_candidates.end(), vec.begin(), vec.end());
+            // }
         }
         // global sort/truncate
         std::sort(all_candidates.begin(), all_candidates.end(),
