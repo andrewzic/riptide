@@ -262,9 +262,9 @@ class VisWorkerPool(object):
         vis_ts.get_skycoords_from_psf_header(vis_ts.header)
         nsamp = vis_ts.nsamp
         skycoords = vis_ts.sky_coords
+        tsamp = vis_ts.tsamp
 
-
-        #one-off loop to densify the sparse cube
+        #one-off computation to densify the sparse cube
         uv_mask = vis_ts.data.max(axis=2) != 0  # shape (U, V)
         u_coords, v_coords = uv_mask.coords  # 1D arrays of active indices
         dense_uv_ts = vis_ts.data[u_coords, v_coords, :].todense()
@@ -286,6 +286,7 @@ class VisWorkerPool(object):
             bins_min = kw_search["bins_min"]
             bins_max = kw_search["bins_max"]  
             wtsp = kw_search["wtsp"]
+            
             ffa_plans = plan_ffa(nsamp, tsamp, period_min, period_max, bins_min, bins_max)      
             # ffa_plan : list of dict
             # Each dict contains:

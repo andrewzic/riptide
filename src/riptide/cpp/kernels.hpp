@@ -112,8 +112,6 @@ inline std::pair<T, size_t> diff_max_index(const T* x, const T* y, size_t n)
     return {best_val, best_idx};
 }
 
-} // namespace riptide
-
 // Compute stddev of an array
 inline float compute_stddev(const float* data, size_t n)
 {
@@ -125,5 +123,7 @@ inline float compute_stddev(const float* data, size_t n)
     }
     return std::sqrt(accum / n);
 }
+
+} // namespace riptide
 
 #endif // KERNELS_HPP
