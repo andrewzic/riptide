@@ -348,6 +348,7 @@ class VisWorkerPool(object):
                         "snr": cand["snr"],
                         "period": cand["period"],
                         "width_bins": cand["width"],
+                        "cutout": cand["cutout"],
                         "ra_deg": skycoord.ra.deg,
                         "dec_deg": skycoord.dec.deg,
                         "skycoord": skycoord

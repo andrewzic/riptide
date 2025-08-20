@@ -391,7 +391,7 @@ vis_ffa_transform_basep(
 
 
 py::list image_ffa_candidates(
-    py::list py_blocks,
+    py::array_t<std::complex<float>> uv_ffa_cube, // (N_uv, Nperiod, Nphase)
     py::array_t<size_t> uv_indices, // shape (M, 2)
     py::array_t<float> psf_image,   // shape (ny, nx), real-valued
     py::array_t<size_t> widths,
@@ -403,52 +403,41 @@ py::list image_ffa_candidates(
     size_t max_candidates_all,
     size_t mask_radius = 2
 ) {
-    size_t M = py_blocks.size();
+    if (uv_ffa_cube.ndim() != 3)
+        throw std::runtime_error("uv_ffa_cube must have shape (N_uv, Nperiod, Nphase)");
+
+    size_t M    = uv_ffa_cube.shape(0);
+    size_t rows = uv_ffa_cube.shape(1);
+    size_t cols = uv_ffa_cube.shape(2);
 
     if (uv_indices.ndim() != 2 || uv_indices.shape(1)!= 2)
         throw std::runtime_error("uv_indices must have shape (M, 2)");
 
     if ((size_t)uv_indices.shape(0) != M)
-        throw std::runtime_error("uv_indices length must match py_blocks length");
+        throw std::runtime_error("uv_indices length must match first dimension of uv_ffa_cube");
 
     if (M == 0)
         throw std::runtime_error("No blocks provided");
 
-    auto first_block = py_blocks[0].cast<py::array>();
-    size_t rows = first_block.shape(0);
-
     if (trial_periods.ndim() != 1 || (size_t)trial_periods.shape(0) != rows)
-        throw std::runtime_error("trial_periods length must match number of rows in blocks");
+        throw std::runtime_error("trial_periods length must match Nperiod dimension");
 
     std::vector<float> periods_vec(trial_periods.size());
     std::memcpy(periods_vec.data(), trial_periods.data(), trial_periods.size() * sizeof(float));
-     
+
     auto uv_un = uv_indices.unchecked<2>();
 
     std::vector<riptide::ConstComplexBlock> blocks;
     std::vector<size_t> u_vec(M), v_vec(M);
-
     blocks.reserve(M);
 
+    // --- new loop: slice uv_ffa_cube along first axis instead of iterating a list ---
+    auto buf = uv_ffa_cube.request();
+    const std::complex<float>* base_ptr = static_cast<const std::complex<float>*>(buf.ptr);
+
     for (size_t i = 0; i < M; ++i) {
-        py::array arr = py::cast<py::array>(py_blocks[i]);
-
-        if (arr.ndim() != 2)
-            throw std::runtime_error("All blocks must be 2D");
-
-        if (!py::isinstance<py::array_t<std::complex<float>>>(arr))
-            throw std::runtime_error("Blocks must be dtype complex64");
-
-        auto buf = arr.request();
-        if (!(buf.ndim == 2 && buf.strides[1] == (ssize_t)sizeof(std::complex<float>)))
-            throw std::runtime_error("Blocks must be C-contiguous");
-
-        blocks.emplace_back(
-            static_cast<const std::complex<float>*>(buf.ptr),
-            (size_t)arr.shape(0),
-            (size_t)arr.shape(1)
-        );
-
+        const std::complex<float>* ptr = base_ptr + i * rows * cols;
+        blocks.emplace_back(ptr, rows, cols);
         u_vec[i] = uv_un(i, 0);
         v_vec[i] = uv_un(i, 1);
     }
@@ -472,8 +461,6 @@ py::list image_ffa_candidates(
     std::memcpy(widths_vec.data(), widths.data(), widths.size() * sizeof(size_t));
 
     riptide::ImageFFATrial ffa(nx, ny);
-
-    // Set PSF FFT
     ffa.set_psf(psf_vec);
 
     auto get_block = [&](size_t i) -> const riptide::ConstComplexBlock& {
@@ -493,15 +480,18 @@ py::list image_ffa_candidates(
         mask_radius
     );
 
-    // Convert to Python list of dicts
     py::list py_cands;
     for (auto& c : candidates) {
         py::dict d;
         d["x"] = c.x;
         d["y"] = c.y;
         d["snr"] = c.snr;
-        d["width"] = c.width_bins;  // width in bins
+        d["width"] = c.width_bins;
         d["period"] = c.period;
+        // convert cutout back to numpy
+        py::array_t<float> cutout({c.cut_h, c.cut_w});
+        std::memcpy(cutout.mutable_data(), c.cutout.data(), c.cutout.size() * sizeof(float));
+        d["cutout"] = cutout;   
         py_cands.append(d);
     }
 
