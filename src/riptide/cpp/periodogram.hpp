@@ -397,5 +397,5 @@ void vis_ffa_transform_basep(
         std::copy(ffaout.begin(), ffaout.end(), out_ptr);
     }
 }
-
+}
 #endif // PERIODOGRAM_HPP

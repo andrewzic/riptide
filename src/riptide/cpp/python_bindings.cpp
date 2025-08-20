@@ -342,7 +342,7 @@ vis_ffa_transform(
 
 std::tuple<py::array_t<std::complex<float>>, py::array_t<double>>
 vis_ffa_transform_basep(
-    py::array_t<std::complex<float>, py::array::c_style | py::array::forcecast> arr_vis_data,
+    py::array_t<std::complex<float>> arr_vis_data,
     size_t bins,
     double tsamp
 ) {
@@ -384,8 +384,8 @@ vis_ffa_transform_basep(
     );
 
     // Wrap periods into NumPy array
-    py::array_t<double> periods_array({rows}, periods.data());
-
+    py::array_t<double> periods_array(ssize_t(rows), periods.data());
+    
     return std::make_tuple(out_array, periods_array);
 }
 
@@ -405,7 +405,7 @@ py::list image_ffa_candidates(
 ) {
     size_t M = py_blocks.size();
 
-    if (uv_indices.ndim() != 2 || uv_indices.shape(1) != 2)
+    if (uv_indices.ndim() != 2 || uv_indices.shape(1)!= 2)
         throw std::runtime_error("uv_indices must have shape (M, 2)");
 
     if ((size_t)uv_indices.shape(0) != M)
@@ -580,11 +580,11 @@ PYBIND11_MODULE(libcpp, m)
         "Compute the FFA transforms of a complex visibility time series. Returns a 3-tuple of arrays: trial periods, number of phase bins, list of FFA transforms"
     );
 
-    m.def(
-        "vis_ffa_transform_basep", &vis_ffa_transform_basep,
-        py::arg("vis_data"), py::arg("bins"), py::arg("tsamp"),
-        "Compute the FFA transform of a block of visibilities (a DGA) for a single base period. Returns a FFA-transformed DGA"
-    );
+    // m.def(
+    //     "vis_ffa_transform_basep", &vis_ffa_transform_basep,
+    //     py::arg("vis_data"), py::arg("bins"), py::arg("tsamp"),
+    //     "Compute the FFA transform of a block of visibilities (a DGA) for a single base period. Returns a FFA-transformed DGA"
+    // );
 
     m.def(
         "image_ffa_candidates", &image_ffa_candidates,
