@@ -300,15 +300,14 @@ class VisWorkerPool(object):
                 downsample_fac = ffa_plan["downsample_factor"]
                 tau = ffa_plan["tau"]
                 base_period = ffa_plan["base_period"]
+                print(base_period)
                 bins = ffa_plan["bins"]
                 rows_eval = ffa_plan["rows_eval"]
 
 
                 # Step 1: run vis_ffa_search for each UV cell
-                # would like this to work by just passing a dense representation of the data, 
-                # and the uv-cells to c++, and get it to process the lot with a single base period etc
-                # for loops in python = bad
-                print(f"doing FFA transform on {len(vis_ts.uv)}")
+
+                print(f"doing FFA transform on {len(vis_ts.uv)} cells with base period {base_period}")
                 uv_ffa = vis_ffa_search_basep(dense_uv_ts, bins, vis_ts.unique_uv, tau)
                 # uv_ffa_list.append(uv_ffa)
 

@@ -499,7 +499,6 @@ class VisTimeSeries(object):
     def get_sparse_unique_uv(self):
         # Take the max along the time axis (axis=2) to find any uv with nonzero timeseries
         uv_mask = self.data.max(axis=2) != 0  # shape (U, V)
-        
         u_coords, v_coords = uv_mask.coords
         self.unique_uv = np.column_stack([u_coords, v_coords])
 
