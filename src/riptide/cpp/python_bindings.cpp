@@ -498,6 +498,85 @@ py::list image_ffa_candidates(
     return py_cands;
 }
 
+py::dict image_ffa_test(
+    py::array_t<std::complex<float>> uv_ffa_cube, // (N_uv, Nperiod, Nphase)
+    py::array_t<size_t> uv_indices,               // (M, 2)
+    py::array_t<float> psf_image,                 // (ny, nx)
+    size_t nx,
+    size_t ny
+) {
+    if (uv_ffa_cube.ndim() != 3)
+        throw std::runtime_error("uv_ffa_cube must have shape (N_uv, Nperiod, Nphase)");
+
+    size_t M    = uv_ffa_cube.shape(0);
+    size_t rows = uv_ffa_cube.shape(1);
+    size_t cols = uv_ffa_cube.shape(2);
+
+    if (uv_indices.ndim() != 2 || uv_indices.shape(1) != 2)
+        throw std::runtime_error("uv_indices must have shape (M, 2)");
+
+    if ((size_t)uv_indices.shape(0) != M)
+        throw std::runtime_error("uv_indices length must match first dimension of uv_ffa_cube");
+
+    if (M == 0)
+        throw std::runtime_error("No blocks provided");
+
+    auto uv_un = uv_indices.unchecked<2>();
+
+    std::vector<riptide::ConstComplexBlock> blocks;
+    std::vector<size_t> u_vec(M), v_vec(M);
+    blocks.reserve(M);
+
+    auto buf = uv_ffa_cube.request();
+    const std::complex<float>* base_ptr = static_cast<const std::complex<float>*>(buf.ptr);
+
+    for (size_t i = 0; i < M; ++i) {
+        const std::complex<float>* ptr = base_ptr + i * rows * cols;
+        blocks.emplace_back(ptr, rows, cols);
+        u_vec[i] = uv_un(i, 0);
+        v_vec[i] = uv_un(i, 1);
+    }
+
+    // Convert PSF image to vector<float>
+    if (psf_image.ndim() != 2 || (size_t)psf_image.shape(0) != ny || (size_t)psf_image.shape(1) != nx)
+        throw std::runtime_error("PSF image must have shape (ny, nx)");
+
+    auto psf_buf = psf_image.unchecked<2>();
+    std::vector<float> psf_vec(nx * ny);
+    for (size_t y = 0; y < ny; ++y) {
+        for (size_t x = 0; x < nx; ++x) {
+            psf_vec[y * nx + x] = psf_buf(y, x);
+        }
+    }
+
+    riptide::ImageFFATrial ffa(nx, ny);
+    ffa.set_psf(psf_vec);
+
+    auto get_block = [&](size_t i) -> const riptide::ConstComplexBlock& {
+        return blocks[i];
+    };
+
+    // Call your test version
+    auto result = ffa.img_all_test(get_block, u_vec, v_vec);
+
+    // Wrap into Python dict
+    py::dict out;
+
+    // uvgrid: complex64 array of shape (ny, nx)
+    py::array_t<std::complex<float>> uvgrid({ny, nx});
+    std::memcpy(uvgrid.mutable_data(), result.uvgrid.data(),
+                result.uvgrid.size() * sizeof(std::complex<float>));
+    out["uvgrid"] = uvgrid;
+
+    // image: float32 array of shape (ny, nx)
+    py::array_t<float> image({ny, nx});
+    std::memcpy(image.mutable_data(), result.image.data(),
+                result.image.size() * sizeof(float));
+    out["image"] = image;
+
+    return out;
+}
+
 py::array_t<float> running_median(py::array_t<float> arr_x, size_t width)
 {
     assert_c_contiguous(arr_x);
@@ -589,6 +668,23 @@ PYBIND11_MODULE(libcpp, m)
         py::arg("max_candidates_width"),
         py::arg("max_candidates_all"), 
         py::arg("mask_radius") = 2
+    );
+
+    //     py::dict image_ffa_test(
+    //     py::array_t<std::complex<float>> uv_ffa_cube, // (N_uv, Nperiod, Nphase)
+    //     py::array_t<size_t> uv_indices,               // (M, 2)
+    //     py::array_t<float> psf_image,                 // (ny, nx)
+    //     size_t nx,
+    //     size_t ny
+    // ) {
+
+    m.def(
+        "image_ffa_test", &image_ffa_test,
+        py::arg("uv_ffa_blocks"), 
+        py::arg("uv_indices"), 
+        py::arg("psf_img"), 
+        py::arg("nx"), 
+        py::arg("ny")
     );
 
     //    py::list py_blocks,

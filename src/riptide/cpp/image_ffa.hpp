@@ -243,6 +243,101 @@ public:
         return all_candidates;
     }
 
+// Build one real image for a given (trial_row, trial_col).
+// Returns both the UV grid and the real-space image.
+template <typename BlockGetter>
+ImgOneResult img_one_test(const BlockGetter& get_block,
+                        const std::vector<size_t>& u_indices,
+                        const std::vector<size_t>& v_indices,
+                        size_t trial_row,
+                        size_t trial_col)
+{
+    if (u_indices.size() != v_indices.size())
+        throw std::runtime_error("u_indices and v_indices must match in size");
+    if (psf_fft_img.empty())
+        throw std::runtime_error("PSF FFT not set. Call set_psf() before img_one.");
+
+    const size_t M = u_indices.size();
+    const size_t img_size = nx * ny;
+
+    // local uvgrid copy (avoid mutating the member if not desired)
+    std::vector<std::complex<float>> local_uvgrid(nx * ny, {0.0f, 0.0f});
+
+    // Fill uvgrid from blocks, multiply by precomputed PSF FFT
+    for (size_t i = 0; i < M; ++i) {
+        auto block = get_block(i);
+        const size_t rows = block.rows;
+        const size_t cols = block.cols;
+
+        if (trial_row >= rows || trial_col >= cols) continue;
+
+        std::complex<float> val = block.data[trial_row * cols + trial_col];
+        const size_t ix = u_indices[i];
+        const size_t iy = v_indices[i];
+        if (ix >= nx || iy >= ny) continue;
+
+        local_uvgrid[iy * nx + ix] = val * psf_fft_img[iy * nx + ix];
+    }
+
+    // Shift DC from center -> (0,0)
+    fftshift2D(local_uvgrid, nx, ny);
+
+    // copy uvgrid into FFTW buffer
+    for (size_t i = 0; i < img_size; ++i) {
+        buf[i][0] = local_uvgrid[i].real();
+        buf[i][1] = local_uvgrid[i].imag();
+    }
+
+    // inverse FFT (uv -> image)
+    fftwf_execute(plan_ifft);
+
+    // normalize (FFTW leaves transforms unscaled)
+    const float scale = 1.0f / static_cast<float>(img_size);
+
+    // extract real part into image
+    std::vector<float> out_img(img_size);
+    for (size_t i = 0; i < img_size; ++i) {
+        out_img[i] = buf[i][0] * scale;
+    }
+
+    // Post-shift: move DC back to center (NumPy convention)
+    fftshift2D(out_img, nx, ny);
+
+    return {std::move(local_uvgrid), std::move(out_img)};
+}
+
+template <typename BlockGetter>
+ImgOneResult img_all_test(
+    const BlockGetter& get_block,
+    const std::vector<size_t>& u_indices,
+    const std::vector<size_t>& v_indices)
+{
+    if (u_indices.size() != v_indices.size())
+        throw std::runtime_error("u_indices and v_indices must match in size");
+
+    if (u_indices.empty())
+        throw std::runtime_error("No blocks provided");
+
+    // check all blocks have same shape
+    auto first_block = get_block(0);
+    const size_t rows = first_block.rows;
+    const size_t cols = first_block.cols;
+    for (size_t i = 1; i < u_indices.size(); ++i) {
+        auto blk = get_block(i);
+        if (blk.rows != rows || blk.cols != cols)
+            throw std::runtime_error("All blocks must have the same shape");
+    }
+
+    // Only process the first trial_row
+    size_t trial_row = 0;
+    size_t trial_col = 0;
+    auto one_result = img_one_test(get_block, u_indices, v_indices,
+                                  trial_row, trial_col);
+    // Compute images for all trial_cols in this row
+    
+    return {std::move(one_result.uvgrid), std::move(one_result.image)};
+}
+
 private:
     size_t nx, ny;
     std::vector<std::complex<float>> uvgrid;

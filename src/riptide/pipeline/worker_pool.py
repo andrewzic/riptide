@@ -2,7 +2,7 @@ import logging
 import multiprocessing
 
 from riptide import TimeSeries, plan_ffa, ffa_search, find_peaks
-from riptide import VisTimeSeries, vis_ffa_search, vis_ffa_search_basep, vis_ffa_image_candidates
+from riptide import VisTimeSeries, vis_ffa_search, vis_ffa_search_basep, vis_ffa_image_candidates, test_vis_ffa_image
 
 from astropy.wcs import WCS
 from astropy.io import fits
@@ -358,3 +358,91 @@ class VisWorkerPool(object):
         df_candidates = pd.DataFrame(all_candidates)
         self.candidates = df_candidates
         return df_candidates
+    
+    def process_uvcells_test(self, real_fname, imag_fname):
+        print("here in process_uvcells", real_fname)
+        all_candidates = []
+        vis_ts = self.loader(real_fname, imag_fname) #this should be generalised
+        #get list of unique u, v pixel cell coords (indices)
+        vis_ts.get_sparse_unique_uv()
+        
+
+        #this will set self.ra_deg, self.dec_deg, and self.psf
+        self.load_psf_img(psf_img_file=self.psf_file)
+        #now set the phase centre attribute of the visibility timeseries
+        vis_ts.set_phase_centre(self.ra_deg, self.dec_deg)
+        #now set the vis_ts.sky_coords grid by calling get_skycoords_from_psf_header
+        vis_ts.get_skycoords_from_psf_header(vis_ts.header)
+        nsamp = vis_ts.nsamp
+        skycoords = vis_ts.sky_coords
+        tsamp = vis_ts.tsamp
+
+        #one-off computation to densify the sparse cube
+        uv_mask = vis_ts.data.max(axis=2) != 0  # shape (U, V)
+        u_coords, v_coords = uv_mask.coords  # 1D arrays of active indices
+        dense_uv_ts = vis_ts.data[u_coords, v_coords, :].todense()
+
+        # dense_uv_ts = []
+        # for uvcell in tqdm(vis_ts.unique_uv):
+        #     ts_np = vis_ts.index_np(uvcell)
+        #     dense_uv_ts.append(ts_np)
+        # dense_uv_ts = np.array(dense_uv_ts)
+
+        trial_idx_ctr = 0
+
+        for conf in self.range_confs:
+            kw_search = dict(conf["ffa_search"])
+            kw_search.update({"deredden": False, "already_normalised": True})
+
+            period_min = kw_search["period_min"]
+            period_max = kw_search["period_max"]
+            bins_min = kw_search["bins_min"]
+            bins_max = kw_search["bins_max"]  
+            wtsp = kw_search["wtsp"]
+            
+            ffa_plans = plan_ffa(nsamp, tsamp, period_min, period_max, bins_min, bins_max)      
+            # ffa_plan : list of dict
+            # Each dict contains:
+            #     - 'downsample_factor'
+            #     - 'tau' (effective sample time)
+            #     - 'bins'
+            #     - 'base_period' (tau*bins)
+            #     - 'rows_eval' (rows used in FFA transform)    
+
+
+            for ffa_plan in ffa_plans:
+                downsample_fac = ffa_plan["downsample_factor"]
+                tau = ffa_plan["tau"]
+                base_period = ffa_plan["base_period"]
+                print(base_period)
+                bins = ffa_plan["bins"]
+                rows_eval = ffa_plan["rows_eval"]
+
+
+                # Step 1: run vis_ffa_search for each UV cell
+
+                print(f"doing FFA transform on {vis_ts.unique_uv.shape} cells with base period {base_period}")
+                uv_ffa = vis_ffa_search_basep(dense_uv_ts, bins, vis_ts.unique_uv, tau)
+                # uv_ffa_list.append(uv_ffa)
+
+                ffa_cube = uv_ffa.ffa_array
+                psf_img = self.psf
+                nx, ny = (self.nx, self.ny)
+                block_periods = uv_ffa.periods
+                block_foldbins = uv_ffa.foldbins
+
+                base_period = uv_ffa.base_period
+                tsamp = uv_ffa.tsamp
+
+                grid_img_dict = test_vis_ffa_image(
+                    ffa_cube,
+                    vis_ts.unique_uv,
+                    psf_img,
+                    nx,
+                    ny
+                )
+                print(f"found {len(trial_candidates)} cands") 
+
+                all_candidates.append(grid_img_dict)
+
+        return all_candidates

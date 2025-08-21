@@ -21,6 +21,11 @@ struct Candidate {
     size_t cut_ny;    // cutout height
 };
 
+struct ImgOneResult {
+    std::vector<std::complex<float>> uvgrid;  // uv-domain grid
+    std::vector<float> image;                 // real-space image
+};
+
 inline std::vector<float> extract_cutout(
     const float* image,
     size_t nx,
