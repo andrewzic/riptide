@@ -388,7 +388,6 @@ class VisWorkerPool(object):
         #     dense_uv_ts.append(ts_np)
         # dense_uv_ts = np.array(dense_uv_ts)
 
-        trial_idx_ctr = 0
 
         for conf in self.range_confs:
             kw_search = dict(conf["ffa_search"])
@@ -398,7 +397,6 @@ class VisWorkerPool(object):
             period_max = kw_search["period_max"]
             bins_min = kw_search["bins_min"]
             bins_max = kw_search["bins_max"]  
-            wtsp = kw_search["wtsp"]
             
             ffa_plans = plan_ffa(nsamp, tsamp, period_min, period_max, bins_min, bins_max)      
             # ffa_plan : list of dict
@@ -428,8 +426,6 @@ class VisWorkerPool(object):
                 ffa_cube = uv_ffa.ffa_array
                 psf_img = self.psf
                 nx, ny = (self.nx, self.ny)
-                block_periods = uv_ffa.periods
-                block_foldbins = uv_ffa.foldbins
 
                 base_period = uv_ffa.base_period
                 tsamp = uv_ffa.tsamp
@@ -441,7 +437,6 @@ class VisWorkerPool(object):
                     nx,
                     ny
                 )
-                print(f"found {len(trial_candidates)} cands") 
 
                 all_candidates.append(grid_img_dict)
 
