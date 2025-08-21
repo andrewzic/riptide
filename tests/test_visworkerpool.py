@@ -19,6 +19,8 @@ from riptide.pipeline import VisPipeline
 from riptide import VisTimeSeries, vis_ffa_search
 
 import pandas as pd
+import  matplotlib.pyplot as plt
+
 
 config = "example_vis.yaml"
 pipe = VisPipeline.from_yaml_config(config)
@@ -30,3 +32,6 @@ all_cands = pipe.vis_search_basep(real_files, imag_files)
 print(all_cands[0])
 for i, df in enumerate(all_cands):
     df.to_pickle(f"cands_{real_files[i]}.pkl")
+    for idx, row in df.iterrows():
+        plt.imshow(row["cutout"], origin="lower", interpolation="none")
+        plt.show()

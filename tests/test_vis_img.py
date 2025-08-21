@@ -19,6 +19,7 @@ from riptide.pipeline import VisPipeline
 from riptide import VisTimeSeries, vis_ffa_search
 
 import pandas as pd
+import  matplotlib.pyplot as plt
 
 config = "example_vis.yaml"
 pipe = VisPipeline.from_yaml_config(config)

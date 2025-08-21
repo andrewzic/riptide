@@ -84,7 +84,7 @@ ranges:
       period_min: 60
 
       # Maximum period for this range, in seconds
-      period_max: 300
+      period_max: 62
 
       # Minimum number of output phase bins
       bins_min: 6
