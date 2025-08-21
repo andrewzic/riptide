@@ -280,7 +280,7 @@ ImgOneResult img_one_test(const BlockGetter& get_block,
     }
 
     // Shift DC from center -> (0,0)
-    fftshift2D(local_uvgrid, nx, ny);
+    // fftshift2D(local_uvgrid, nx, ny);
 
     // copy uvgrid into FFTW buffer
     for (size_t i = 0; i < img_size; ++i) {
@@ -301,7 +301,7 @@ ImgOneResult img_one_test(const BlockGetter& get_block,
     }
 
     // Post-shift: move DC back to center (NumPy convention)
-    fftshift2D(out_img, nx, ny);
+    // fftshift2D(out_img, nx, ny);
 
     return {std::move(local_uvgrid), std::move(out_img)};
 }
