@@ -420,15 +420,14 @@ class VisWorkerPool(object):
                 # Step 1: run vis_ffa_search for each UV cell
 
                 print(f"doing FFA transform on {vis_ts.unique_uv.shape} cells with base period {base_period}")
-                uv_ffa = vis_ffa_search_basep(dense_uv_ts, bins, vis_ts.unique_uv, tau)
+                #uv_ffa = vis_ffa_search_basep(dense_uv_ts, bins, vis_ts.unique_uv, tau)
                 # uv_ffa_list.append(uv_ffa)
 
-                ffa_cube = uv_ffa.ffa_array
+                #ffa_cube = uv_ffa.ffa_array
                 psf_img = self.psf
-                nx, ny = (self.nx, self.ny)
+                ffa_cube = (1 + 1j*0)*np.ones(vis_ts.unique_uv.size, 10, 10)
 
-                base_period = uv_ffa.base_period
-                tsamp = uv_ffa.tsamp
+                nx, ny = (self.nx, self.ny)
 
                 grid_img_dict = test_vis_ffa_image(
                     ffa_cube,
