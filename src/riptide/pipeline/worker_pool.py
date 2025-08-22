@@ -425,7 +425,7 @@ class VisWorkerPool(object):
 
                 #ffa_cube = uv_ffa.ffa_array
                 psf_img = self.psf
-                ffa_cube = (1 + 1j*0)*np.ones((vis_ts.unique_uv.size, 10, 10))
+                ffa_cube = (1 + 1j*0)*np.ones((vis_ts.unique_uv.shape[0], 10, 10))
 
                 nx, ny = (self.nx, self.ny)
 
