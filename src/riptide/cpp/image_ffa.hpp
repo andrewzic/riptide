@@ -71,7 +71,7 @@ public:
         std::vector<std::complex<float>> tmp(nx * ny);
         for (size_t i = 0; i < nx * ny; ++i) tmp[i] = { psf_image[i], 0.0f };
 
-        // shift DC from center to (0,0) before forward FFT (NumPy fftshift convention)
+        // shift DC from centre to (0,0) before forward FFT (NumPy fftshift convention)
         fftshift2D(tmp, nx, ny);
 
         // copy into forward fftw buffer
@@ -86,6 +86,10 @@ public:
         // store psf FFT (complex) for later use
         psf_fft_img.resize(nx * ny);
         for (size_t i = 0; i < nx * ny; ++i) psf_fft_img[i] = { buf_fwd[i][0], buf_fwd[i][1] };
+
+        //fftshift psf_fft_img to match input uv grid (DC at centre)
+        fftshift2D(psf_fft_img, nx, ny);
+
     }
 
     // Build one real image for a given (trial_row, trial_col).
@@ -127,7 +131,7 @@ public:
             uvgrid[iy * nx + ix] = val * psf_fft_img[iy * nx + ix];
         }
 
-        // Shift DC from center -> (0,0) so FFTW sees DC at origin
+        // Shift DC from centre -> (0,0) so FFTW sees DC at origin
         fftshift2D(uvgrid, nx, ny);
 
         // copy uvgrid into IFFT buffer
@@ -148,7 +152,7 @@ public:
             out_img[i] = buf[i][0] * scale;
         }
 
-        // Post-shift: move DC back to center (NumPy convention)
+        // Post-shift: move DC back to centre (NumPy convention)
         fftshift2D(out_img, nx, ny);
     }
 
@@ -279,8 +283,8 @@ ImgOneResult img_one_test(const BlockGetter& get_block,
         local_uvgrid[iy * nx + ix] = val * psf_fft_img[iy * nx + ix];
     }
 
-    // Shift DC from center -> (0,0)
-    // fftshift2D(local_uvgrid, nx, ny);
+    // Shift DC from centre -> (0,0)
+    fftshift2D(local_uvgrid, nx, ny);
 
     // copy uvgrid into FFTW buffer
     for (size_t i = 0; i < img_size; ++i) {
@@ -294,14 +298,13 @@ ImgOneResult img_one_test(const BlockGetter& get_block,
     // normalize (FFTW leaves transforms unscaled)
     const float scale = 1.0f / static_cast<float>(img_size);
 
-    // extract real part into image
     std::vector<float> out_img(img_size);
     for (size_t i = 0; i < img_size; ++i) {
         out_img[i] = buf[i][0] * scale;
     }
 
-    // Post-shift: move DC back to center (NumPy convention)
-    // fftshift2D(out_img, nx, ny);
+    // Post: move DC back to centre (np convention)
+    fftshift2D(out_img, nx, ny);
 
     return {std::move(local_uvgrid), std::move(out_img)};
 }
