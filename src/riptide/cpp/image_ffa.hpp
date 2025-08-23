@@ -280,7 +280,7 @@ ImgOneResult img_one_test(const BlockGetter& get_block,
         const size_t iy = v_indices[i];
         if (ix >= nx || iy >= ny) continue;
 
-        local_uvgrid[iy * nx + ix] = val; // * psf_fft_img[iy * nx + ix];
+        local_uvgrid[iy * nx + ix] = val * psf_fft_img[iy * nx + ix];
     }
 
     // Shift DC from centre -> (0,0)

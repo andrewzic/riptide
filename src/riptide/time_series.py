@@ -479,7 +479,7 @@ class VisTimeSeries(object):
             self.phase_centre = None #
         else:
             self.phase_centre = SkyCoord(phase_centre[0]*u.deg, phase_centre[1]*u.deg, frame="icrs") if isinstance(phase_centre, tuple) else phase_centre
-        
+        self.unique_uv = None
         self.header = header
 
     @property
@@ -498,10 +498,20 @@ class VisTimeSeries(object):
     
     def get_sparse_unique_uv(self):
         # Take the max along the time axis (axis=2) to find any uv with nonzero timeseries
-        uv_mask = self.data.max(axis=2) != 0  # shape (U, V)
+        # assumes cube is shape (t, u, v)
+        uv_mask = self.data.max(axis=0) != 0  # shape (U, V)
         u_coords, v_coords = uv_mask.coords
         self.unique_uv = np.column_stack([u_coords, v_coords])
 
+    def make_dynamic_grid_array(self):
+        if self.unique_uv is None:
+            self.get_sparse_unique_uv()
+        dynamic_grid_array = np.ascontiguousarray(np.transpose(self.data[:, *uv_coords].todense()))
+        del(self.data)
+        self.data = None
+        self.dga = dynamic_grid_array
+        
+        
     def set_grid_params(self, nu, nv, du, dv):
         """
         set grid parameters nu, nv, du, dv i.e. size of grid on u and v axes,

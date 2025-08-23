@@ -167,7 +167,6 @@ class VisWorkerPool(object):
         #get list of unique u, v pixel cell coords (indices)
         vis_ts.get_sparse_unique_uv()
         
-
         #this will set self.ra_deg, self.dec_deg, and self.psf
         self.load_psf_img(psf_img_file=self.psf_file)
         #now set the phase centre attribute of the visibility timeseries
@@ -253,7 +252,6 @@ class VisWorkerPool(object):
         #get list of unique u, v pixel cell coords (indices)
         vis_ts.get_sparse_unique_uv()
         
-
         #this will set self.ra_deg, self.dec_deg, and self.psf
         self.load_psf_img(psf_img_file=self.psf_file)
         #now set the phase centre attribute of the visibility timeseries
@@ -265,15 +263,9 @@ class VisWorkerPool(object):
         tsamp = vis_ts.tsamp
 
         #one-off computation to densify the sparse cube
-        uv_mask = vis_ts.data.max(axis=2) != 0  # shape (U, V)
-        u_coords, v_coords = uv_mask.coords  # 1D arrays of active indices
-        dense_uv_ts = vis_ts.data[u_coords, v_coords, :].todense()
-
-        # dense_uv_ts = []
-        # for uvcell in tqdm(vis_ts.unique_uv):
-        #     ts_np = vis_ts.index_np(uvcell)
-        #     dense_uv_ts.append(ts_np)
-        # dense_uv_ts = np.array(dense_uv_ts)
+        #this deletes vis_ts.data
+        vis_ts.make_dynamic_grid_array()
+        dense_uv_ts = vis_ts.dga
 
         trial_idx_ctr = 0
 
@@ -300,11 +292,10 @@ class VisWorkerPool(object):
             for ffa_plan in ffa_plans:
                 downsample_fac = ffa_plan["downsample_factor"]
                 tau = ffa_plan["tau"]
-                base_period = ffa_plan["base_period"]
+                base_period = ffa_plan["base_period"] #need to make sure this is int bins, not real base period [s]
                 print(base_period)
                 bins = ffa_plan["bins"]
                 rows_eval = ffa_plan["rows_eval"]
-
 
                 # Step 1: run vis_ffa_search for each UV cell
 
@@ -376,18 +367,22 @@ class VisWorkerPool(object):
         nsamp = vis_ts.nsamp
         skycoords = vis_ts.sky_coords
         tsamp = vis_ts.tsamp
-
+        print(vis_ts.data.shape, "vis ts shape")
         #one-off computation to densify the sparse cube
-        uv_mask = vis_ts.data.max(axis=2) != 0  # shape (U, V)
+        uv_mask = vis_ts.data.max(axis=0) != 0  # shape (U, V)
+        print("UV mask shape:", uv_mask.shape)
         u_coords, v_coords = uv_mask.coords  # 1D arrays of active indices
-        dense_uv_ts = vis_ts.data[u_coords, v_coords, :].todense()
-
-        # dense_uv_ts = []
-        # for uvcell in tqdm(vis_ts.unique_uv):
-        #     ts_np = vis_ts.index_np(uvcell)
-        #     dense_uv_ts.append(ts_np)
-        # dense_uv_ts = np.array(dense_uv_ts)
-
+        dense_uv_ts = vis_ts.data[:, u_coords, v_coords].todense()
+        dense_uv_ts = np.ascontiguousarray(np.transpose(dense_uv_ts)) #cast to uv, time
+        print("dga shape:", dense_uv_ts.shape)
+        print("len uvcoords:", len(u_coords), uv_mask.shape)
+        grid_ = np.zeros((self.ny, self.nx))
+        for u, v in zip(u_coords, v_coords):
+            #print(u,v)
+            grid_[v, u] = 1.0
+        import matplotlib.pyplot as plt
+        plt.imshow(grid_)
+        plt.show()
 
         for conf in self.range_confs:
             kw_search = dict(conf["ffa_search"])
@@ -420,6 +415,7 @@ class VisWorkerPool(object):
                 # Step 1: run vis_ffa_search for each UV cell
 
                 print(f"doing FFA transform on {vis_ts.unique_uv.shape} cells with base period {base_period}")
+                print(f"vis_ts data shape is {vis_ts.data.shape}")
                 uv_ffa = vis_ffa_search_basep(dense_uv_ts, bins, vis_ts.unique_uv, tau)
                 # uv_ffa_list.append(uv_ffa)
 
@@ -429,6 +425,20 @@ class VisWorkerPool(object):
 
                 nx, ny = (self.nx, self.ny)
 
+                print(vis_ts.unique_uv.shape)
+                print(ffa_cube.shape)
+                grid = np.zeros((ny, nx))
+                for uv, cube in zip(vis_ts.unique_uv, ffa_cube):
+                    #print(uv)
+                    #print(cube.shape)
+                    grid[*uv] = cube[0, 0]
+                import matplotlib.pyplot as plt
+                plt.imshow(np.abs(grid), vmin=-3*np.std(grid), vmax=3*np.std(grid))
+                plt.show()
+                fft = np.fft.fftshift(np.fft.ifft2(np.fft.fftshift(grid))).real
+                plt.imshow(fft, vmin=-3*np.std(fft), vmax=3*np.std(fft))
+                plt.show()
+                
                 grid_img_dict = test_vis_ffa_image(
                     ffa_cube,
                     vis_ts.unique_uv,
