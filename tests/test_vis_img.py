@@ -24,8 +24,14 @@ import  matplotlib.pyplot as plt
 config = "example_vis.yaml"
 pipe = VisPipeline.from_yaml_config(config)
 
-real_files = glob.glob("data/J0901-4046_small-t2000*real.cube.fits")
-imag_files = glob.glob("data/J0901-4046_small-t2000*imag.cube.fits")
+#big ones
+# real_files = glob.glob("data/J0901-4046_small-t2000*real.cube.fits")
+# imag_files = glob.glob("data/J0901-4046_small-t2000*imag.cube.fits")
+
+real_files = glob.glob("data/J0901-4046_short_small-t0004-uv*real.cube.fits")
+imag_files = glob.glob("data/J0901-4046_short_small-t0004-uv*imag.cube.fits")
+
+
 pipe.prepare(real_files, imag_files)
 all_results = pipe.vis_test_img(real_files, imag_files)
 for res in all_results:
