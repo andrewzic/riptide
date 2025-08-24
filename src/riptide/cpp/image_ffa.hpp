@@ -128,7 +128,7 @@ public:
             if (ix >= nx || iy >= ny) continue;
 
             // multiply visibility (uv) by psf_fft_img (also in uv domain)
-            uvgrid[iy * nx + ix] = val * psf_fft_img[iy * nx + ix];
+            uvgrid[iy * nx + ix] = val; // * psf_fft_img[iy * nx + ix];
         }
 
         // Shift DC from centre -> (0,0) so FFTW sees DC at origin

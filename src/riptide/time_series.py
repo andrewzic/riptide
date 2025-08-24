@@ -487,6 +487,10 @@ class VisTimeSeries(object):
         """numpy array holding the time series data, in complex64 format."""
         return self._data
 
+    @data.setter
+    def data(self, new_value):
+        self._data = new_value
+
     @property
     def tsamp(self):
         """Sampling time in seconds."""
@@ -506,8 +510,9 @@ class VisTimeSeries(object):
     def make_dynamic_grid_array(self):
         if self.unique_uv is None:
             self.get_sparse_unique_uv()
-        dynamic_grid_array = np.ascontiguousarray(np.transpose(self.data[:, *uv_coords].todense()))
-        del(self.data)
+        u_coords = self.unique_uv[:, 0]
+        v_coords = self.unique_uv[:, 1]
+        dynamic_grid_array = np.ascontiguousarray(np.transpose(self.data[:, u_coords, v_coords].todense()))
         self.data = None
         self.dga = dynamic_grid_array
         

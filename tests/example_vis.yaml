@@ -81,10 +81,10 @@ ranges:
     # docstring for more information.
     ffa_search:
       # Minimum period for this range, in seconds
-      period_min: 60
+      period_min: 73
 
       # Maximum period for this range, in seconds
-      period_max: 62
+      period_max: 300
 
       # Minimum number of output phase bins
       bins_min: 6
