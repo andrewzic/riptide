@@ -248,16 +248,19 @@ class VisWorkerPool(object):
     def process_uvcells_basep(self, real_fname, imag_fname):
         print("here in process_uvcells", real_fname)
         all_candidates = []
+        
         vis_ts = self.loader(real_fname, imag_fname) #this should be generalised
+        print("loaded data cube")
         #get list of unique u, v pixel cell coords (indices)
         vis_ts.get_sparse_unique_uv()
         
         #this will set self.ra_deg, self.dec_deg, and self.psf
         self.load_psf_img(psf_img_file=self.psf_file)
+        print("loaded psf image")
         #now set the phase centre attribute of the visibility timeseries
         vis_ts.set_phase_centre(self.ra_deg, self.dec_deg)
         #now set the vis_ts.sky_coords grid by calling get_skycoords_from_psf_header
-        vis_ts.get_skycoords_from_psf_header(vis_ts.header)
+        vis_ts.get_skycoords_from_psf_header(vis_ts.header)        
         nsamp = vis_ts.nsamp
         skycoords = vis_ts.sky_coords
         tsamp = vis_ts.tsamp
@@ -265,8 +268,12 @@ class VisWorkerPool(object):
         #one-off computation to densify the sparse cube
         #this deletes vis_ts.data
         vis_ts.make_dynamic_grid_array()
+        print("made DGA")        
         dense_uv_ts = vis_ts.dga
+        
 
+        print(f"DGA memory usage: {vis_ts.dga.nbytes}")
+        
         trial_idx_ctr = 0
 
         for conf in self.range_confs:
@@ -287,19 +294,18 @@ class VisWorkerPool(object):
             #     - 'bins'
             #     - 'base_period' (tau*bins)
             #     - 'rows_eval' (rows used in FFA transform)    
-
-
+            
             for ffa_plan in ffa_plans:
                 downsample_fac = ffa_plan["downsample_factor"]
                 tau = ffa_plan["tau"]
                 base_period = ffa_plan["base_period"] #need to make sure this is int bins, not real base period [s]
                 print(base_period)
-                bins = ffa_plan["bins"]
+                bins = ffa_plan["bins"] #this is what we should pass downstream for base folding period... I think
                 rows_eval = ffa_plan["rows_eval"]
 
                 # Step 1: run vis_ffa_search for each UV cell
-
-                print(f"doing FFA transform on {vis_ts.unique_uv.shape} cells with base period {base_period}")
+                
+                print(f"doing FFA transform on {vis_ts.unique_uv.shape} cells with base period {bins}, corresponding to {base_period*tau} s. ")
                 uv_ffa = vis_ffa_search_basep(dense_uv_ts, bins, vis_ts.unique_uv, tau)
                 # uv_ffa_list.append(uv_ffa)
 
