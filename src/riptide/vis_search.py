@@ -163,7 +163,7 @@ def vis_ffa_image_candidates(
     Parameters
     ----------
     ffa_blocks : list of np.ndarray (complex64)
-        Each block is a (phase, freq) folded visibility from FFA.
+        Each block is a (nperiod, nphase) folded visibility from FFA.
     uv_indices : np.ndarray, shape (M, 2), int
         Integer (u, v) indices for each block.
     psf_image : np.ndarray, shape (ny, nx), float
@@ -196,7 +196,7 @@ def vis_ffa_image_candidates(
         raise ValueError(f"psf_image must have shape ({ny}, {nx})")
     
     # Generate widths in bins
-    nbins = ffa_blocks[0].shape[0]
+    nbins = ffa_blocks[0].shape[1] #THIS WAS CHANGED FROM .shape[0]
     widths = generate_width_trials(nbins, ducy_max=ducy_max, wtsp=wtsp).astype(np.uint64)
 
     # Call C++ candidate search

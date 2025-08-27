@@ -786,7 +786,111 @@ class VisTimeSeries(object):
             sparse_grid = sparse.COO(np.where(np.abs(data) > threshold, data, 0))
 
         return cls(sparse_grid, tsamp, dtype=sparse_grid.dtype, nu=nu, nv=nv, du=du, dv=dv, header=header)
-                   
+
+    @classmethod
+    def from_real_imag_cube_chunked(cls, real_cube_file, imag_cube_file, u_slice=None, v_slice=None, threshold=3e-3):
+        """
+        Load only a chunk of the cube along (u, v) dimensions.
+        If u_slice or v_slice are None, take the full range in that dimension.
+        """
+        with fits.open(real_cube_file, memmap=True) as real_hdul, fits.open(imag_cube_file, memmap=True) as imag_hdul:
+
+            header = real_hdul[0].header
+            wcs = WCS(header)
+            nu = header["NAXIS1"]
+            nv = header["NAXIS2"]
+            du = header["CDELT1"]
+            dv = header["CDELT2"]
+            ctype = "TIME"
+            fits_idx = wcs.axis_type_names.index(ctype) + 1
+            tsamp = float(header[f"CDELT{fits_idx}"])
+
+            # default full slices
+            u_slice = slice(0, nu) if u_slice is None else u_slice
+            v_slice = slice(0, nv) if v_slice is None else v_slice
+
+            # load just the requested chunk
+            real_data = np.nan_to_num(real_hdul[0].data[..., u_slice, v_slice], nan=0.0, posinf=0.0, neginf=0.0)
+            imag_data = np.nan_to_num(imag_hdul[0].data[..., u_slice, v_slice], nan=0.0, posinf=0.0, neginf=0.0)
+
+            data = real_data + 1j * imag_data
+
+            # Apply threshold
+            sparse_grid = sparse.COO(np.where(np.abs(data) > threshold, data, 0))
+
+        return cls(sparse_grid, tsamp, dtype=sparse_grid.dtype,
+                   nu=u_slice.stop - u_slice.start,
+                   nv=v_slice.stop - v_slice.start,
+                   du=du, dv=dv, header=header)
+    
+    # @classmethod
+    # def from_real_imag_cube_chunked(cls, real_cube_file, imag_cube_file,
+    #                                 threshold=3e-3, chunk_size=64):
+    #     """
+    #     Chunked loader for large visibility cubes.
+    #     - Leaves time dimension intact
+    #     - Chunks along last 2 axes (u,v)
+    #     - Builds a sparse cube lazily with dask
+
+    #     Parameters
+    #     ----------
+    #     real_cube_file : str
+    #         Path to FITS file containing real part of visibilities
+    #     imag_cube_file : str
+    #         Path to FITS file containing imaginary part of visibilities
+    #     threshold : float
+    #         Absolute value threshold below which values are set to zero
+    #     chunk_size : int
+    #         Spatial chunk size along u,v dimensions
+
+    #     Returns
+    #     -------
+    #     VisTimeSeries
+    #         Instance with dask-backed sparse data cube
+    #     """
+    #     # Open headers
+    #     with fits.open(real_cube_file, memmap=True) as real_hdul:
+    #         header = real_hdul[0].header
+    #         wcs = WCS(header)
+
+    #     nu = header["NAXIS1"]
+    #     nv = header["NAXIS2"]
+    #     fits_idx = wcs.axis_type_names.index("TIME") + 1
+    #     tsamp = float(header[f"CDELT{fits_idx}"])
+    #     du = header["CDELT1"]
+    #     dv = header["CDELT2"]
+
+    #     # Open lazily with dask
+    #     real_darr = da.from_array(
+    #         fits.getdata(real_cube_file, memmap=True),
+    #         chunks=(-1, chunk_size, chunk_size)  # keep time axis whole
+    #     )
+    #     imag_darr = da.from_array(
+    #         fits.getdata(imag_cube_file, memmap=True),
+    #         chunks=(-1, chunk_size, chunk_size)
+    #     )
+
+    #     darr = real_darr + 1j * imag_darr
+
+    #     # Threshold lazily
+    #     darr = da.where(da.abs(darr) > threshold, darr, 0.0)
+
+    #     # At this stage darr is (time, v, u) with dask backing
+    #     # Convert to sparse for efficient indexing
+    #     # NOTE: keep as dask.array until densification step
+    #     sparse_grid = sparse.from_numpy(darr.compute())  # or wrap lazy later
+
+    #     return cls(
+    #         sparse_grid,
+    #         tsamp,
+    #         dtype=sparse_grid.dtype,
+    #         nu=nu,
+    #         nv=nv,
+    #         du=du,
+    #         dv=dv,
+    #         header=header
+    #     )
+
     @classmethod
     def from_img_cube(cls, cube_file):
         with fits.open(cube_file, memmap=True) as hdul:

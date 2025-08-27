@@ -76,6 +76,21 @@ class WorkerPool(object):
         return allpeaks
     
 
+def _uv_slices(nu, nv, u_chunks, v_chunks):
+    u_size = math.ceil(nu / u_chunks)
+    v_size = math.ceil(nv / v_chunks)
+    u_slices = [slice(i, min(i + u_size, nu)) for i in range(0, nu, u_size)]
+    v_slices = [slice(j, min(j + v_size, nv)) for j in range(0, nv, v_size)]
+    return u_slices, v_slices
+
+def _paths_for(plan_idx, u_sl, v_sl, outdir):
+    tag = f"p{plan_idx}_u{u_sl.start}-{u_sl.stop}_v{v_sl.start}-{v_sl.stop}"
+    return (os.path.join(outdir, f"ffa_{tag}.npy"),
+            os.path.join(outdir, f"uv_{tag}.npy"))
+
+def _ensure_dir(path):
+    os.makedirs(path, exist_ok=True)
+
 class VisWorkerPool(object):
     """
     deredden_params : dict
@@ -249,33 +264,43 @@ class VisWorkerPool(object):
         print("here in process_uvcells", real_fname)
         all_candidates = []
         
+        #load in the data all in one blob
+        # this is horrible on i/o and RAM
         vis_ts = self.loader(real_fname, imag_fname) #this should be generalised
+        #vis_ts should be a sparse.COO cube
         print("loaded data cube")
-        #get list of unique u, v pixel cell coords (indices)
+
+        #get list of unique u, v pixel cell coords (for all nonzero u,v pixels)
         vis_ts.get_sparse_unique_uv()
         
-        #this will set self.ra_deg, self.dec_deg, and self.psf
+        #now set self.ra_deg, self.dec_deg, and self.psf
         self.load_psf_img(psf_img_file=self.psf_file)
         print("loaded psf image")
+
         #now set the phase centre attribute of the visibility timeseries
         vis_ts.set_phase_centre(self.ra_deg, self.dec_deg)
+
         #now set the vis_ts.sky_coords grid by calling get_skycoords_from_psf_header
-        vis_ts.get_skycoords_from_psf_header(vis_ts.header)        
+        vis_ts.get_skycoords_from_psf_header(vis_ts.header)
+
+        #get and set other handy attributes
         nsamp = vis_ts.nsamp
         skycoords = vis_ts.sky_coords
         tsamp = vis_ts.tsamp
 
-        #one-off computation to densify the sparse cube
+        #perform one-off computation to densify the sparse cube
         #this deletes vis_ts.data
         vis_ts.make_dynamic_grid_array()
-        print("made DGA")        
+        # the result is a 2D numpy array for every nonzero (u,v) pixel in the 3D cube
+        # each row of the 2D array has a filled time series of size nsamp
+        print("made DGA")
         dense_uv_ts = vis_ts.dga
         
-
         print(f"DGA memory usage: {vis_ts.dga.nbytes}")
         
         trial_idx_ctr = 0
 
+        #range_confs is the period search parameter ranges defined in the config file
         for conf in self.range_confs:
             kw_search = dict(conf["ffa_search"])
             kw_search.update({"deredden": False, "already_normalised": True})
@@ -286,6 +311,7 @@ class VisWorkerPool(object):
             bins_max = kw_search["bins_max"]  
             wtsp = kw_search["wtsp"]
             
+            #plan out the FFA - base periods, etc given the input period min, max, bins min, max, tsamp, etc
             ffa_plans = plan_ffa(nsamp, tsamp, period_min, period_max, bins_min, bins_max)      
             # ffa_plan : list of dict
             # Each dict contains:
@@ -303,12 +329,12 @@ class VisWorkerPool(object):
                 bins = ffa_plan["bins"] #this is what we should pass downstream for base folding period... I think
                 rows_eval = ffa_plan["rows_eval"]
 
-                # Step 1: run vis_ffa_search for each UV cell
-                
+                # MAJOR Step 1: run vis_ffa_search for each UV cell
                 print(f"doing FFA transform on {vis_ts.unique_uv.shape} cells with base period {bins}, corresponding to {base_period*tau} s. ")
                 uv_ffa = vis_ffa_search_basep(dense_uv_ts, bins, vis_ts.unique_uv, tau)
                 # uv_ffa_list.append(uv_ffa)
 
+                # gather up results
                 ffa_cube = uv_ffa.ffa_array
                 psf_img = self.psf
                 nx, ny = (self.nx, self.ny)
@@ -318,6 +344,7 @@ class VisWorkerPool(object):
                 base_period = uv_ffa.base_period
                 tsamp = uv_ffa.tsamp
 
+                # now image each period, phase trial in the output (u,v,period,phase) cube
                 trial_candidates = vis_ffa_image_candidates(
                     ffa_cube,
                     vis_ts.unique_uv,
@@ -334,6 +361,7 @@ class VisWorkerPool(object):
                 )
                 print(f"found {len(trial_candidates)} cands") 
 
+                # gather candidates and add info to dataframe dict
                 for cand in trial_candidates:
                     # cand.x, cand.y are image pixel coords
                     skycoord = skycoords[cand["y"], cand["x"]]  # lookup coord
@@ -352,10 +380,239 @@ class VisWorkerPool(object):
                         "skycoord": skycoord
                     })
                     trial_idx_ctr += 1
+        #construct dataframe
         df_candidates = pd.DataFrame(all_candidates)
         self.candidates = df_candidates
         return df_candidates
-    
+
+    def process_uvcells_basep_dask(self, real_fname, imag_fname,
+                                u_chunks=16, v_chunks=16,
+                                threshold=3e-3,
+                                periods_per_block=256,
+                                outdir="ffa_chunks"):
+        """
+        Dask workflow:
+        1) (u,v)-chunked load of time-cube -> per-chunk FFA (saved to disk).
+        2) Period-block imaging across ALL (u,v) by reading all chunk FFA files
+            for the selected period rows (global inverse FT + candidate search).
+        """
+
+        _ensure_dir(outdir)
+
+        # -------------------------------------------------------------
+        # Global geometry + header info (no big data read)
+        # -------------------------------------------------------------
+        with fits.open(real_fname, memmap=True) as hdul:
+            header = hdul[0].header
+            nu = header["NAXIS1"]
+            nv = header["NAXIS2"]
+        # PSF image + image grid
+        self.load_psf_img(psf_img_file=self.psf_file)
+        psf_img = self.psf
+        nx, ny = self.nx, self.ny
+
+        # We need tsamp + nsamp. Grab just one small chunk and read its time length.
+        # (We won’t hold the data; only metadata.)
+        tmp_vis = VisTimeSeries.from_real_imag_cube_chunked(
+            real_fname, imag_fname, slice(0, min(1, nu)), slice(0, min(1, nv)), threshold=threshold
+        )
+        tsamp = tmp_vis.tsamp
+        nsamp = tmp_vis.nsamp
+        # sky grid used for RA/Dec lookup from image pixels
+        tmp_vis.set_phase_centre(self.ra_deg, self.dec_deg)
+        skycoords = tmp_vis.get_skycoords_from_psf_header(tmp_vis.header)  # shape (ny, nx)
+
+        # -------------------------------------------------------------
+        # Build (u,v) chunk grid
+        # -------------------------------------------------------------
+        u_slices, v_slices = _uv_slices(nu, nv, u_chunks, v_chunks)
+
+        # -------------------------------------------------------------
+        # Stage 1: per-(u,v)-chunk delayed FFA computation to disk
+        # -------------------------------------------------------------
+        @delayed
+        def compute_ffa_for_chunk(plan_idx, u_sl, v_sl, bins, tau):
+            vis_ts = VisTimeSeries.from_real_imag_cube_chunked(
+                real_fname, imag_fname, u_slice=u_sl, v_slice=v_sl, threshold=threshold
+            )
+            # Find nonzero (u,v) within this chunk
+            vis_ts.get_sparse_unique_uv()
+            if vis_ts.unique_uv is None or len(vis_ts.unique_uv) == 0:
+                # Nothing in this chunk; write tiny placeholders
+                ffa_path, uv_path = _paths_for(plan_idx, u_sl, v_sl, outdir)
+                np.save(ffa_path, np.zeros((0, 1, 1), dtype=np.complex64))
+                np.save(uv_path, np.zeros((0, 2), dtype=np.uint64))
+                return {"plan_idx": plan_idx, "u_sl": (u_sl.start, u_sl.stop), "v_sl": (v_sl.start, v_sl.stop),
+                        "ffa_path": ffa_path, "uv_path": uv_path, "nperiod": 0, "nphase": 0, "m": 0}
+
+            # Densify this chunk’s active cells: shape (M_chunk, nsamp)
+            vis_ts.make_dynamic_grid_array()
+            dense_uv_ts = vis_ts.dga  # contiguous (M_chunk, nsamp)
+
+            # FFA at base period 'bins' and sample time 'tau'
+            uv_ffa = vis_ffa_search_basep(dense_uv_ts, bins, vis_ts.unique_uv, tau)
+            ffa_cube = uv_ffa.ffa_array  # (M_chunk, Nperiod, Nphase)
+
+            # Build global uv indices for this chunk by offsetting local coords
+            u0, v0 = u_sl.start, v_sl.start
+            local_uv = vis_ts.unique_uv.astype(np.uint64, copy=False)
+            uv_indices_global = local_uv.copy()
+            uv_indices_global[:, 0] += np.uint64(u0)
+            uv_indices_global[:, 1] += np.uint64(v0)
+
+            # Save to disk (later imaging tasks will mmap only needed period rows)
+            ffa_path, uv_path = _paths_for(plan_idx, u_sl, v_sl, outdir)
+            np.save(ffa_path, ffa_cube.astype(np.complex64, copy=False))
+            np.save(uv_path, uv_indices_global)
+
+            return {"plan_idx": plan_idx,
+                    "u_sl": (u_sl.start, u_sl.stop),
+                    "v_sl": (v_sl.start, v_sl.stop),
+                    "ffa_path": ffa_path,
+                    "uv_path": uv_path,
+                    "nperiod": ffa_cube.shape[1],
+                    "nphase": ffa_cube.shape[2],
+                    "m": ffa_cube.shape[0]}
+
+        # -------------------------------------------------------------
+        # Build plans from your config
+        # -------------------------------------------------------------
+        plan_specs = []
+        for conf in self.range_confs:
+            kw = dict(conf["ffa_search"])
+            kw.update({"deredden": False, "already_normalised": True})
+            ffa_plans = plan_ffa(nsamp, tsamp,
+                                kw["period_min"], kw["period_max"],
+                                kw["bins_min"],   kw["bins_max"])
+            plan_specs.extend(ffa_plans)
+
+        # For each plan, spawn FFA tasks for every (u,v) chunk
+        all_plan_chunk_tasks = []
+        for plan_idx, plan in enumerate(plan_specs):
+            bins = plan["bins"]
+            tau = plan["tau"]
+            for u_sl, v_sl in product(u_slices, v_slices):
+                all_plan_chunk_tasks.append(compute_ffa_for_chunk(plan_idx, u_sl, v_sl, bins, tau))
+
+        # Trigger computation and collect metadata (paths, shapes)
+        chunk_meta_list = list(compute(*all_plan_chunk_tasks))
+
+        # -------------------------------------------------------------
+        # Stage 2: period-block imaging across ALL (u,v)
+        # -------------------------------------------------------------
+        # Group chunk metadata by plan_idx
+        by_plan = {}
+        for meta in chunk_meta_list:
+            by_plan.setdefault(meta["plan_idx"], []).append(meta)
+
+        @delayed
+        def image_period_block(plan_idx, p_start, p_stop, plan_bins, plan_tau):
+            """
+            For this plan and period-block [p_start:p_stop):
+            - mmap and slice every chunk’s FFA cube to these periods
+            - concatenate along UV axis (first)
+            - run imaging+candidate search once globally
+            """
+            metas = by_plan[plan_idx]
+
+            # Gather per-chunk slices
+            ffa_slices = []
+            uv_slices = []
+            m_total = 0
+            for m in metas:
+                # skip empty chunks
+                if m["nperiod"] == 0 or m["m"] == 0:
+                    continue
+                # mmap and slice only required period rows
+                arr = np.load(m["ffa_path"], mmap_mode="r")
+                sub = arr[:, p_start:p_stop, :]          # shape (M_chunk, Pblk, Nphase)
+                ffa_slices.append(np.asarray(sub))       # force a view that concatenates cleanly
+                uv = np.load(m["uv_path"])
+                uv_slices.append(uv)
+                m_total += uv.shape[0]
+
+            if m_total == 0:
+                return []  # nothing to image in this block
+
+            uv_ffa_cube = np.concatenate(ffa_slices, axis=0)   # shape (M_total, Pblk, Nphase)
+            uv_indices  = np.concatenate(uv_slices, axis=0)    # shape (M_total, 2)
+
+            # periods for this plan (identical for all chunks)
+            periods_full = libffa.ffaprd(N=nsamp, p=int(plan_bins), dt=plan_tau)
+            periods_block = periods_full[p_start:p_stop]
+
+            # global imaging + candidate search
+            cands = vis_ffa_image_candidates(
+                uv_ffa_cube,
+                uv_indices.astype(np.uint64, copy=False),
+                psf_img.astype(np.float32, copy=False),
+                periods_block.astype(np.float32, copy=False),
+                nx, ny,
+                snr_thresh=8.0,
+                max_candidates_width=500,
+                max_candidates_all=10000,
+                ducy_max=0.5,
+                wtsp=1.5,
+                mask_radius=2
+            )
+            # enrich with period-block indexing for traceability
+            for d in cands:
+                d["plan_idx"] = plan_idx
+                d["p_start"]  = int(p_start)
+                d["p_stop"]   = int(p_stop)
+            return cands
+
+        # build all period-block imaging tasks
+        imaging_tasks = []
+        for plan_idx, plan in enumerate(plan_specs):
+            # determine nperiod for this plan (take max over chunks)
+            metas = by_plan.get(plan_idx, [])
+            if not metas:
+                continue
+            nperiod = max(m["nperiod"] for m in metas) if metas else 0
+            if nperiod == 0:
+                continue
+
+            bins = plan["bins"]
+            tau  = plan["tau"]
+
+            for p_start in range(0, nperiod, periods_per_block):
+                p_stop = min(p_start + periods_per_block, nperiod)
+                imaging_tasks.append(image_period_block(plan_idx, p_start, p_stop, bins, tau))
+
+        # Compute all imaging tasks
+        block_results = compute(*imaging_tasks)
+
+        # -------------------------------------------------------------
+        # Assemble final dataframe and RA/Dec (post-processing on driver)
+        # -------------------------------------------------------------
+        all_candidates = []
+        for block_cands in block_results:
+            if not block_cands:
+                continue
+            for cand in block_cands:
+                x = int(cand["x"])
+                y = int(cand["y"])
+                sc = skycoords[y, x]
+                all_candidates.append({
+                    "plan_idx": cand["plan_idx"],
+                    "p_start": cand["p_start"],
+                    "p_stop": cand["p_stop"],
+                    "x_pix": x,
+                    "y_pix": y,
+                    "snr": float(cand["snr"]),
+                    "period": float(cand["period"]),
+                    "width_bins": int(cand["width"]),
+                    "cutout": cand["cutout"],     # np.ndarray (ny_cut, nx_cut)
+                    "ra_deg": sc.ra.deg,
+                    "dec_deg": sc.dec.deg,
+                    "skycoord": sc
+                })
+
+        df = pd.DataFrame(all_candidates)
+        self.candidates = df
+        return df
+
     def process_uvcells_test(self, real_fname, imag_fname):
         print("here in process_uvcells", real_fname)
         all_candidates = []
