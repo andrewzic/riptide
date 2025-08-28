@@ -571,6 +571,74 @@ class VisPipeline(object):
         return all_candidates
     
     @timing
+    def vis_search_basep_dask(self, real_files, imag_files,
+                              use_slurm=False,
+                              n_workers=4,
+                              threads_per_worker=1,
+                              memory_per_worker="8GB",
+                              walltime="02:00:00",
+                              scheduler_options=None,
+                              u_chunks=4, v_chunks=4,
+                              threshold=3e-3,
+                              periods_per_block=256,
+                              outdir="ffa_chunks"):
+        """
+        Run the base-period search pipeline on one or more visibility cubes.
+
+        - Spins up a Dask cluster (local by default, SLURM optionally).
+        - Dispatches work to the VisWorkerPool.process_uvcells_basep_dask method.
+        """
+
+        # -------------------------------------------------------------
+        # Setup Dask cluster/client
+        # -------------------------------------------------------------
+        if use_slurm:
+            if SLURMCluster is None:
+                raise RuntimeError("dask-jobqueue not installed, cannot use SLURM backend")
+            cluster = SLURMCluster(
+                cores=threads_per_worker,
+                memory=memory_per_worker,
+                walltime=walltime,
+                **(scheduler_options or {})
+            )
+            cluster.scale(n_workers)
+        else:
+            cluster = LocalCluster(
+                n_workers=n_workers,
+                threads_per_worker=threads_per_worker,
+                memory_limit=memory_per_worker,
+                **(scheduler_options or {})
+            )
+
+        client = Client(cluster)
+        log.info(f"Dask dashboard at: {client.dashboard_link}")
+
+        # -------------------------------------------------------------
+        # Run worker pool tasks
+        # -------------------------------------------------------------
+        all_candidates = []
+        for real_file, imag_file in zip(real_files, imag_files):
+            log.info(f"Processing {real_file}, {imag_file}")
+            candidates = self.worker_pool.process_uvcells_basep_dask(
+                real_file, imag_file,
+                u_chunks=u_chunks,
+                v_chunks=v_chunks,
+                threshold=threshold,
+                periods_per_block=periods_per_block,
+                outdir=outdir
+            )
+            all_candidates.append(candidates)
+
+        # -------------------------------------------------------------
+        # Shutdown cluster cleanly
+        # -------------------------------------------------------------
+        client.close()
+        cluster.close()
+
+        return all_candidates
+
+
+    @timing
     def vis_test_img(self, real_files, imag_files):
         """
         vis-search the selected file
