@@ -25,8 +25,16 @@ from riptide.pipeline.harmonic_testing import htest
 from riptide.serialization import save_json
 from riptide.timing import timing
 
+from dask.distributed import Client, LocalCluster
+try:
+    from dask_jobqueue import SLURMCluster
+except ImportError:
+    SLURMCluster = None
+
+
 
 log = logging.getLogger("riptide.pipeline")
+
 
 
 class CandidateWriter(object):
