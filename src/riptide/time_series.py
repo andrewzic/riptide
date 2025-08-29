@@ -502,8 +502,9 @@ class VisTimeSeries(object):
     
     def get_sparse_unique_uv(self):
         # Take the max along the time axis (axis=2) to find any uv with nonzero timeseries
-        # assumes self.data shape is (t, u, v)
-        uv_mask = (self.data != 0).any(axis=0)   # shape (u, v), may be sparse or dense
+        # assumes self.data shape is (..., u, v)
+        axes_to_reduce = tuple(range(self.data.ndim - 2))
+        uv_mask = (self.data != 0).any(axis=axes_to_reduce)  # shape (u, v)
 
         if hasattr(uv_mask, "coords"):  # sparse array
             u_coords, v_coords = uv_mask.coords
