@@ -589,7 +589,8 @@ class VisPipeline(object):
                               u_chunks=4, v_chunks=4,
                               threshold=3e-3,
                               periods_per_block=256,
-                              outdir="ffa_chunks"):
+                              outdir="ffa_chunks",
+                              dashboard_address=":8788"):
         """
         Run the base-period search pipeline on one or more visibility cubes.
 
@@ -615,6 +616,7 @@ class VisPipeline(object):
                 n_workers=n_workers,
                 threads_per_worker=threads_per_worker,
                 memory_limit=memory_per_worker,
+                dashboard_address=dashboard_address,
                 **(scheduler_options or {})
             )
 

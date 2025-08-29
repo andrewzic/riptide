@@ -1,3 +1,4 @@
+import os
 import logging
 import multiprocessing
 
@@ -9,6 +10,7 @@ from astropy.io import fits
 
 import pandas as pd
 import numpy as np
+import math
 
 from itertools import product
 from dask import delayed, compute
