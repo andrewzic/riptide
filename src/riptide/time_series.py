@@ -793,6 +793,7 @@ class VisTimeSeries(object):
         Load only a chunk of the cube along (u, v) dimensions.
         If u_slice or v_slice are None, take the full range in that dimension.
         """
+        print(f"in here with {u_slice.start}, {u_slice.stop}; {v_slice.start}, {v_slice.stop}")
         with fits.open(real_cube_file, memmap=True) as real_hdul, fits.open(imag_cube_file, memmap=True) as imag_hdul:
 
             header = real_hdul[0].header
@@ -810,10 +811,15 @@ class VisTimeSeries(object):
             v_slice = slice(0, nv) if v_slice is None else v_slice
 
             # load just the requested chunk
-            real_data = np.nan_to_num(real_hdul[0].data[..., u_slice, v_slice], nan=0.0, posinf=0.0, neginf=0.0)
-            imag_data = np.nan_to_num(imag_hdul[0].data[..., u_slice, v_slice], nan=0.0, posinf=0.0, neginf=0.0)
+            real_data = real_hdul[0].data[..., u_slice, v_slice] #, nan=0.0, posinf=0.0, neginf=0.0)
+            imag_data = imag_hdul[0].data[..., u_slice, v_slice] #, nan=0.0, posinf=0.0, neginf=0.0)
 
             data = real_data + 1j * imag_data
+            # real = da.from_array(real_hdul[0].data, chunks=(time_chunk, u_chunk, v_chunk))
+            # imag = da.from_array(imag_hdul[0].data, chunks=(time_chunk, u_chunk, v_chunk))
+            # data = da.map_blocks(lambda r, i: r + 1j*i, real, imag)
+            # data = da.where(da.abs(data) > threshold, data, 0)
+
 
             # Apply threshold
             sparse_grid = sparse.COO(np.where(np.abs(data) > threshold, data, 0))
