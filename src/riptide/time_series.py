@@ -820,7 +820,7 @@ class VisTimeSeries(object):
             real_data = real_hdul[0].data[..., u_slice, v_slice] #, nan=0.0, posinf=0.0, neginf=0.0)
             imag_data = imag_hdul[0].data[..., u_slice, v_slice] #, nan=0.0, posinf=0.0, neginf=0.0)
 
-            data = real_data + 1j * imag_data
+            data = (real_data + 1j * imag_data).squeeze() #get rid of redundant dimensions
             print(f"size of data is {data.nbytes}")
             # real = da.from_array(real_hdul[0].data, chunks=(time_chunk, u_chunk, v_chunk))
             # imag = da.from_array(imag_hdul[0].data, chunks=(time_chunk, u_chunk, v_chunk))
