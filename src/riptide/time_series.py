@@ -502,9 +502,14 @@ class VisTimeSeries(object):
     
     def get_sparse_unique_uv(self):
         # Take the max along the time axis (axis=2) to find any uv with nonzero timeseries
-        # assumes cube is shape (t, u, v)
-        uv_mask = self.data.max(axis=0) != 0  # shape (U, V)
-        u_coords, v_coords = uv_mask.coords
+        # assumes self.data shape is (t, u, v)
+        uv_mask = (self.data != 0).any(axis=0)   # shape (u, v), may be sparse or dense
+
+        if hasattr(uv_mask, "coords"):  # sparse array
+            u_coords, v_coords = uv_mask.coords
+        else:  # dense numpy array
+            u_coords, v_coords = np.nonzero(uv_mask)
+
         self.unique_uv = np.column_stack([u_coords, v_coords])
 
     def make_dynamic_grid_array(self):
@@ -815,6 +820,7 @@ class VisTimeSeries(object):
             imag_data = imag_hdul[0].data[..., u_slice, v_slice] #, nan=0.0, posinf=0.0, neginf=0.0)
 
             data = real_data + 1j * imag_data
+            print(f"size of data is {data.nbytes}")
             # real = da.from_array(real_hdul[0].data, chunks=(time_chunk, u_chunk, v_chunk))
             # imag = da.from_array(imag_hdul[0].data, chunks=(time_chunk, u_chunk, v_chunk))
             # data = da.map_blocks(lambda r, i: r + 1j*i, real, imag)
