@@ -586,7 +586,7 @@ class VisPipeline(object):
                               memory_per_worker="8GB",
                               walltime="02:00:00",
                               scheduler_options=None,
-                              u_chunks=4, v_chunks=4,
+                              u_chunks=8, v_chunks=8,
                               threshold=3e-3,
                               periods_per_block=256,
                               outdir="ffa_chunks",
