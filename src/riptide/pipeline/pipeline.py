@@ -581,14 +581,14 @@ class VisPipeline(object):
     @timing
     def vis_search_basep_dask(self, real_files, imag_files,
                               use_slurm=False,
-                              n_workers=4,
+                              n_workers=24,
                               threads_per_worker=1,
                               memory_per_worker="8GB",
                               walltime="02:00:00",
                               scheduler_options=None,
                               u_chunks=8, v_chunks=8,
                               threshold=3e-3,
-                              periods_per_block=256,
+                              periods_per_block=16,
                               outdir="ffa_chunks",
                               dashboard_address=":8788"):
         """
