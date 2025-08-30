@@ -357,12 +357,13 @@ std::vector<ImgTestResult> img_all_test_img(
         // Build SNR plane for width=1
         std::vector<float> plane(img_size);
         float best_snr = -1e30f;
+        size_t width_one = 1;
         for (size_t y = 0; y < ny; ++y) {
             for (size_t x = 0; x < nx; ++x) {
                 size_t pix_idx = y * nx + x;
                 for (size_t p = 0; p < cols; ++p)
                     profile[p] = all_phase_imgs[p * img_size + pix_idx];
-                snr1(profile.data(), cols, /*widths*/ & (size_t{1}), 1,
+                snr1(profile.data(), cols, /*widths*/ &width_one, 1,
                      stdnoise, &tmp_snr, cpfsum.data());
                 plane[pix_idx] = tmp_snr;
                 if (tmp_snr > best_snr)

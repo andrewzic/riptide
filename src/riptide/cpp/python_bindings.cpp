@@ -648,9 +648,9 @@ py::dict image_ffa_test_img(
     auto results = ffa.img_all_test_img(get_block, u_vec, v_vec, tp_vec, nx, ny);
 
     // Allocate numpy outputs
-    py::array_t<float> images({rows, ny, nx});
-    py::array_t<float> snrs({rows});
-    py::array_t<float> periods({rows});
+    py::array_t<float> images({py::ssize_t(rows), py::ssize_t(ny), py::ssize_t(nx)});
+    py::array_t<float> snrs({py::ssize_t(rows)});
+    py::array_t<float> periods({py::ssize_t(rows)});
 
     auto images_ptr  = images.mutable_data();
     auto snrs_ptr    = snrs.mutable_data();
