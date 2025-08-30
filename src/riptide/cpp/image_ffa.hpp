@@ -310,6 +310,77 @@ ImgOneResult img_one_test(const BlockGetter& get_block,
 }
 
 template <typename BlockGetter>
+std::vector<ImgTestResult> img_all_test_img(
+    const BlockGetter& get_block,
+    const std::vector<size_t>& u_indices,
+    const std::vector<size_t>& v_indices,
+    const std::vector<float>& trial_periods,
+    size_t nx,
+    size_t ny)
+{
+    if (u_indices.size() != v_indices.size())
+        throw std::runtime_error("u_indices and v_indices must match in size");
+
+    if (u_indices.empty())
+        throw std::runtime_error("No blocks provided");
+
+    auto first_block = get_block(0);
+    const size_t rows = first_block.rows;
+    const size_t cols = first_block.cols;
+    for (size_t i = 1; i < u_indices.size(); ++i) {
+        auto blk = get_block(i);
+        if (blk.rows != rows || blk.cols != cols)
+            throw std::runtime_error("All blocks must have the same shape");
+    }
+
+    const size_t img_size = nx * ny;
+    std::vector<float> all_phase_imgs(cols * img_size);
+
+    std::vector<ImgTestResult> results;
+    results.reserve(rows);
+
+    // temp buffers for SNR calc
+    std::vector<float> profile(cols);
+    std::vector<float> cpfsum(cols + 1);
+    float tmp_snr;
+
+    for (size_t trial_row = 0; trial_row < rows; ++trial_row) {
+        // Compute images for all trial_cols
+        for (size_t trial_col = 0; trial_col < cols; ++trial_col) {
+            float* out_img = &all_phase_imgs[trial_col * img_size];
+            img_one(get_block, u_indices, v_indices, trial_row, trial_col, out_img);
+        }
+
+        // Estimate noise across stack
+        float stdnoise = compute_stddev(all_phase_imgs.data(), cols * img_size);
+
+        // Build SNR plane for width=1
+        std::vector<float> plane(img_size);
+        float best_snr = -1e30f;
+        for (size_t y = 0; y < ny; ++y) {
+            for (size_t x = 0; x < nx; ++x) {
+                size_t pix_idx = y * nx + x;
+                for (size_t p = 0; p < cols; ++p)
+                    profile[p] = all_phase_imgs[p * img_size + pix_idx];
+                snr1(profile.data(), cols, /*widths*/ & (size_t{1}), 1,
+                     stdnoise, &tmp_snr, cpfsum.data());
+                plane[pix_idx] = tmp_snr;
+                if (tmp_snr > best_snr)
+                    best_snr = tmp_snr;
+            }
+        }
+
+        results.push_back({
+            std::move(plane),
+            best_snr,
+            trial_periods[trial_row]
+        });
+    }
+
+    return results;
+}
+
+template <typename BlockGetter>
 ImgOneResult img_all_test(
     const BlockGetter& get_block,
     const std::vector<size_t>& u_indices,
