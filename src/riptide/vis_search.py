@@ -284,3 +284,67 @@ def test_vis_ffa_image(
         # d["period"]
 
     return results
+
+@timing
+def test_vis_ffa_image_imgs(
+    ffa_blocks,
+    uv_indices,
+    psf_image,
+    nx,
+    ny
+):
+    """
+    Run C++-based imaging + candidate search on a set of FFA blocks.
+
+    Parameters
+    ----------
+    ffa_blocks : list of np.ndarray (complex64)
+        Each block is a (phase, freq) folded visibility from FFA.
+    uv_indices : np.ndarray, shape (M, 2), int
+        Integer (u, v) indices for each block.
+    psf_image : np.ndarray, shape (ny, nx), float
+        Real-valued PSF image in image space.
+    nx, ny : int
+        Output image dimensions.
+    snr_thresh : float
+        Minimum SNR for a detection to be considered a candidate.
+    ducy_max, wtsp : float
+        Parameters for width trial generation.
+    max_candidates_width : int
+        Max candidates to keep for each width trial.
+    max_candidates_all : int
+        Max total candidates to keep across all widths.
+    mask_radius : int
+        Radius (in pixels) to mask around each found candidate.
+
+    Returns
+    -------
+    candidates : list of dict
+        Each dict has { 'x', 'y', 'snr', 'width_bins' }.
+    """
+    # Validate input types/shapes
+    # if not isinstance(ffa_blocks, list) or not all(isinstance(b, np.ndarray) for b in ffa_blocks):
+    #     raise ValueError("ffa_blocks must be a list of numpy arrays (complex64)")
+    uv_indices = np.asarray(uv_indices)
+    if uv_indices.shape != (len(ffa_blocks), 2):
+        raise ValueError("uv_indices must have shape (M, 2) matching ffa_blocks length")
+    if psf_image.shape != (ny, nx):
+        raise ValueError(f"psf_image must have shape ({ny}, {nx})")
+
+    # Call C++ candidate search
+    results = libcpp.image_ffa_test_img(
+        ffa_blocks,
+        uv_indices.astype(np.uint64, copy=False),
+        psf_image.astype(np.float32, copy=False),
+        nx,
+        ny
+    )   
+        # py::dict d;
+        # d["x"] = c.x;
+        # d["y"] = c.y;
+        # d["snr"] = c.snr;
+        # d["width"] = c.width_bins;  // width in bins
+        # d["period"]
+
+    return results
+

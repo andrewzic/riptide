@@ -34,6 +34,7 @@ __all__ = [
     "vis_ffa_search",
     "vis_ffa_search_basep",
     "test_vis_ffa_image",
+    "test_vis_ffa_image_imgs",
     "vis_ffa_image_candidates",
     "ffa1",
     "ffa2",

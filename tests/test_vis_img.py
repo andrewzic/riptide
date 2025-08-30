@@ -21,7 +21,7 @@ from riptide import VisTimeSeries, vis_ffa_search
 import pandas as pd
 import  matplotlib.pyplot as plt
 
-config = "example_vis.yaml"
+config = "example_vis_70.yaml"
 pipe = VisPipeline.from_yaml_config(config)
 
 #big ones
@@ -34,11 +34,18 @@ imag_files = glob.glob("data/J0901-4046_short_small-t0004-uv*imag.cube.fits")
 
 pipe.prepare(real_files, imag_files)
 all_results = pipe.vis_test_img(real_files, imag_files)
-for res in all_results:
-    print(res)
-    print(len(res))
-    for r in res:
-        fig, axs = plt.subplots(1,2)
-        axs[0].imshow(r["image"])
-        axs[1].imshow(np.abs(r["uvgrid"]))
-        plt.show()
+d = all_results[0]
+for img, period in zip(d["images"], d["periods"]):
+    plt.imshow(img)
+    plt.title(f"P={period:.3f}")
+    plt.show()
+
+# for res in all_results:
+#     plt.imshow()
+#     print(res)
+#     print(len(res))
+#     for r in res:
+#         fig, axs = plt.subplots(1,2)
+#         axs[0].imshow(r["image"])
+#         axs[1].imshow(np.abs(r["uvgrid"]))
+#         plt.show()

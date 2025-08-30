@@ -3,7 +3,7 @@ import logging
 import multiprocessing
 
 from riptide import TimeSeries, plan_ffa, ffa_search, find_peaks, libffa
-from riptide import VisTimeSeries, vis_ffa_search, vis_ffa_search_basep, vis_ffa_image_candidates, test_vis_ffa_image
+from riptide import VisTimeSeries, vis_ffa_search, vis_ffa_search_basep, vis_ffa_image_candidates, test_vis_ffa_image, test_vis_ffa_image_imgs
 
 from astropy.wcs import WCS
 from astropy.io import fits
@@ -616,13 +616,13 @@ class VisWorkerPool(object):
         dense_uv_ts = np.ascontiguousarray(np.transpose(dense_uv_ts)) #cast to uv, time
         print("dga shape:", dense_uv_ts.shape)
         print("len uvcoords:", len(u_coords), uv_mask.shape)
-        grid_ = np.zeros((self.ny, self.nx))
-        for u, v in zip(u_coords, v_coords):
-            #print(u,v)
-            grid_[v, u] = 1.0
-        import matplotlib.pyplot as plt
-        plt.imshow(grid_)
-        plt.show()
+        # grid_ = np.zeros((self.ny, self.nx))
+        # for u, v in zip(u_coords, v_coords):
+        #     #print(u,v)
+        #     grid_[v, u] = 1.0
+        # import matplotlib.pyplot as plt
+        # plt.imshow(grid_)
+        # plt.show()
 
         for conf in self.range_confs:
             kw_search = dict(conf["ffa_search"])
@@ -672,14 +672,14 @@ class VisWorkerPool(object):
                     #print(uv)
                     #print(cube.shape)
                     grid[*uv] = cube[0, 0]
-                import matplotlib.pyplot as plt
-                plt.imshow(np.abs(grid), vmin=-3*np.std(grid), vmax=3*np.std(grid))
-                plt.show()
-                fft = np.fft.fftshift(np.fft.ifft2(np.fft.fftshift(grid))).real
-                plt.imshow(fft, vmin=-3*np.std(fft), vmax=3*np.std(fft))
-                plt.show()
+                # import matplotlib.pyplot as plt
+                # plt.imshow(np.abs(grid), vmin=-3*np.std(grid), vmax=3*np.std(grid))
+                # plt.show()
+                # fft = np.fft.fftshift(np.fft.ifft2(np.fft.fftshift(grid))).real
+                # plt.imshow(fft, vmin=-3*np.std(fft), vmax=3*np.std(fft))
+                # plt.show()
                 
-                grid_img_dict = test_vis_ffa_image(
+                img_dict = test_vis_ffa_image_imgs(
                     ffa_cube,
                     vis_ts.unique_uv,
                     psf_img,
@@ -687,6 +687,6 @@ class VisWorkerPool(object):
                     ny
                 )
 
-                all_candidates.append(grid_img_dict)
+                all_candidates.append(img_dict)
 
         return all_candidates
