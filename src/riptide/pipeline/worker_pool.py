@@ -2,7 +2,7 @@ import os
 import logging
 import multiprocessing
 
-from riptide import TimeSeries, plan_ffa, ffa_search, find_peaks
+from riptide import TimeSeries, plan_ffa, ffa_search, find_peaks, libffa
 from riptide import VisTimeSeries, vis_ffa_search, vis_ffa_search_basep, vis_ffa_image_candidates, test_vis_ffa_image
 
 from astropy.wcs import WCS
