@@ -21,7 +21,7 @@ def main():
         use_slurm=False,
         n_workers=24,
         memory_per_worker="5GB",
-        periods_per_block=16,
+        periods_per_block=4,
         u_chunks=8, v_chunks=8,
         dashboard_address=":8790",  # avoids port 8787 conflict
     )
