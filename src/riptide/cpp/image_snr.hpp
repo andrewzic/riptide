@@ -26,6 +26,12 @@ struct ImgOneResult {
     std::vector<float> image;                 // real-space image
 };
 
+struct ImgTestResult {
+    std::vector<float> image;  // best-SNR plane (nx*ny)
+    float snr;                 // max SNR found
+    float period;              // trial_period for this row
+};
+
 inline std::vector<float> extract_cutout(
     const float* image,
     size_t nx,
