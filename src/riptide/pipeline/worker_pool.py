@@ -609,11 +609,16 @@ class VisWorkerPool(object):
         tsamp = vis_ts.tsamp
         print(vis_ts.data.shape, "vis ts shape")
         #one-off computation to densify the sparse cube
-        uv_mask = vis_ts.data.max(axis=0) != 0  # shape (U, V)
-        print("UV mask shape:", uv_mask.shape)
-        u_coords, v_coords = uv_mask.coords  # 1D arrays of active indices
-        dense_uv_ts = vis_ts.data[:, u_coords, v_coords].todense()
-        dense_uv_ts = np.ascontiguousarray(np.transpose(dense_uv_ts)) #cast to uv, time
+        vis_ts.make_dynamic_grid_array()
+        # the result is a 2D numpy array for every nonzero (u,v) pixel in the 3D cube
+        # each row of the 2D array has a filled time series of size nsamp
+        print("made DGA")
+        dense_uv_ts = vis_ts.dga
+        # uv_mask = vis_ts.data.max(axis=0) != 0  # shape (U, V)
+        # print("UV mask shape:", uv_mask.shape)
+        # u_coords, v_coords = uv_mask.coords  # 1D arrays of active indices
+        # dense_uv_ts = vis_ts.data[:, u_coords, v_coords].todense()
+        # dense_uv_ts = np.ascontiguousarray(np.transpose(dense_uv_ts)) #cast to uv, time
         print("dga shape:", dense_uv_ts.shape)
         print("len uvcoords:", len(u_coords), uv_mask.shape)
         # grid_ = np.zeros((self.ny, self.nx))
@@ -668,6 +673,7 @@ class VisWorkerPool(object):
                 print(vis_ts.unique_uv.shape)
                 print(ffa_cube.shape)
                 grid = np.zeros((ny, nx))
+                print(vis_ts.unique_uv.shape)
                 for uv, cube in zip(vis_ts.unique_uv, ffa_cube):
                     #print(uv)
                     #print(cube.shape)
