@@ -660,7 +660,7 @@ class VisWorkerPool(object):
                 # Step 1: run vis_ffa_search for each UV cell
 
                 print(f"doing FFA transform on {vis_ts.unique_uv.shape} cells with base period {base_period}")
-                print(f"vis_ts data shape is {vis_ts.data.shape}")
+                #print(f"vis_ts data shape is {vis_ts.data.shape}")
                 uv_ffa = vis_ffa_search_basep(dense_uv_ts, bins, vis_ts.unique_uv, tau)
                 # uv_ffa_list.append(uv_ffa)
 
