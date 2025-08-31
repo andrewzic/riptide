@@ -783,6 +783,16 @@ PYBIND11_MODULE(libcpp, m)
         py::arg("ny")
     );
 
+    m.def(
+        "image_ffa_test_img", &image_ffa_test_img,
+        py::arg("uv_ffa_cube"),
+        py::arg("uv_indices"),
+        py::arg("psf_image"),
+        py::arg("trial_periods"),
+        py::arg("nx"),
+        py::arg("ny"),
+    ) {
+
     //    py::list py_blocks,
     // py::array_t<size_t> uv_indices, // shape (M, 2)
     // py::array_t<float> psf_image,   // shape (ny, nx), real-valued

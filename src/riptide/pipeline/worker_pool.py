@@ -656,7 +656,7 @@ class VisWorkerPool(object):
                 bins = ffa_plan["bins"]
                 rows_eval = ffa_plan["rows_eval"]
 
-
+                periods = libffa.ffaprd(N=nsamp, p=int(bins), dt=plan_tau)
                 # Step 1: run vis_ffa_search for each UV cell
 
                 print(f"doing FFA transform on {vis_ts.unique_uv.shape} cells with base period {base_period}")
@@ -689,6 +689,7 @@ class VisWorkerPool(object):
                     ffa_cube,
                     vis_ts.unique_uv,
                     psf_img,
+                    periods,
                     nx,
                     ny
                 )
