@@ -620,7 +620,7 @@ class VisWorkerPool(object):
         # dense_uv_ts = vis_ts.data[:, u_coords, v_coords].todense()
         # dense_uv_ts = np.ascontiguousarray(np.transpose(dense_uv_ts)) #cast to uv, time
         print("dga shape:", dense_uv_ts.shape)
-        print("len uvcoords:", len(u_coords), uv_mask.shape)
+        # print("len uvcoords:", len(u_coords), uv_mask.shape)
         # grid_ = np.zeros((self.ny, self.nx))
         # for u, v in zip(u_coords, v_coords):
         #     #print(u,v)
