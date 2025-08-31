@@ -290,6 +290,7 @@ def test_vis_ffa_image_imgs(
     ffa_blocks,
     uv_indices,
     psf_image,
+    periods,
     nx,
     ny
 ):
@@ -336,6 +337,7 @@ def test_vis_ffa_image_imgs(
         ffa_blocks,
         uv_indices.astype(np.uint64, copy=False),
         psf_image.astype(np.float32, copy=False),
+        periods,
         nx,
         ny
     )   
