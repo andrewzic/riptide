@@ -790,7 +790,7 @@ PYBIND11_MODULE(libcpp, m)
         py::arg("psf_image"),
         py::arg("trial_periods"),
         py::arg("nx"),
-        py::arg("ny"),
+        py::arg("ny")
     );
 
     //    py::list py_blocks,
