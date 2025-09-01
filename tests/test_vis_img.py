@@ -34,8 +34,11 @@ imag_files = glob.glob("data/J0901-4046_short_small-t0004-uv*imag.cube.fits")
 
 pipe.prepare(real_files, imag_files)
 all_results = pipe.vis_test_img(real_files, imag_files)
+print(all_results)
 d = all_results[0]
-for img, period in zip(d["images"], d["periods"]):
+print(d)
+
+for img, period in zip(d[0]["images"], d[0]["periods"]):
     plt.imshow(img)
     plt.title(f"P={period:.3f}")
     plt.show()
