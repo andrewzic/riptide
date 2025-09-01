@@ -26,10 +26,18 @@ struct ImgOneResult {
     std::vector<float> image;                 // real-space image
 };
 
+// struct ImgTestResult {
+//     std::vector<float> image;  // best-SNR plane (nx*ny)
+//     float snr;                 // max SNR found
+//     float period;              // trial_period for this row
+// };
+
 struct ImgTestResult {
-    std::vector<float> image;  // best-SNR plane (nx*ny)
-    float snr;                 // max SNR found
-    float period;              // trial_period for this row
+    std::vector<float> snr_plane;      // (ny*nx)
+    float best_snr;
+    float trial_period;
+    std::vector<std::complex<float>> uvgrid; // from img_one_test
+    std::vector<float> image;                // from img_one_test
 };
 
 inline std::vector<float> extract_cutout(

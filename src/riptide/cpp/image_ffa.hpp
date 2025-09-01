@@ -351,6 +351,10 @@ std::vector<ImgTestResult> img_all_test_img(
             img_one(get_block, u_indices, v_indices, trial_row, trial_col, out_img);
         }
 
+        // Grab the uvgrid + image for the first phase bin (trial_col=0)
+        auto one_result = img_one_test(get_block, u_indices, v_indices,
+                                       trial_row, 0);
+
         // Estimate noise across stack
         float stdnoise = compute_stddev(all_phase_imgs.data(), cols * img_size);
 
@@ -363,7 +367,7 @@ std::vector<ImgTestResult> img_all_test_img(
                 size_t pix_idx = y * nx + x;
                 for (size_t p = 0; p < cols; ++p)
                     profile[p] = all_phase_imgs[p * img_size + pix_idx];
-                snr1(profile.data(), cols, /*widths*/ &width_one, 1,
+                snr1(profile.data(), cols, &width_one, 1,
                      stdnoise, &tmp_snr, cpfsum.data());
                 plane[pix_idx] = tmp_snr;
                 if (tmp_snr > best_snr)
@@ -374,7 +378,9 @@ std::vector<ImgTestResult> img_all_test_img(
         results.push_back({
             std::move(plane),
             best_snr,
-            trial_periods[trial_row]
+            trial_periods[trial_row],
+            std::move(one_result.uvgrid),
+            std::move(one_result.image)
         });
     }
 

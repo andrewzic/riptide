@@ -651,24 +651,43 @@ py::dict image_ffa_test_img(
     py::array_t<float> images({py::ssize_t(rows), py::ssize_t(ny), py::ssize_t(nx)});
     py::array_t<float> snrs({py::ssize_t(rows)});
     py::array_t<float> periods({py::ssize_t(rows)});
+    py::array_t<float> first_images({py::ssize_t(rows), py::ssize_t(ny), py::ssize_t(nx)});
+    py::array_t<std::complex<float>> first_grids({py::ssize_t(rows), py::ssize_t(ny), py::ssize_t(nx)});
 
-    auto images_ptr  = images.mutable_data();
-    auto snrs_ptr    = snrs.mutable_data();
-    auto periods_ptr = periods.mutable_data();
+    auto images_ptr       = images.mutable_data();
+    auto snrs_ptr         = snrs.mutable_data();
+    auto periods_ptr      = periods.mutable_data();
+    auto first_images_ptr = first_images.mutable_data();
+    auto first_grids_ptr  = first_grids.mutable_data();
 
     for (size_t r = 0; r < rows; ++r) {
         const auto& res = results[r];
+
+        // SNR plane
         std::memcpy(images_ptr + r * (nx * ny),
+                    res.snr_plane.data(),
+                    nx * ny * sizeof(float));
+
+        // First-phase image
+        std::memcpy(first_images_ptr + r * (nx * ny),
                     res.image.data(),
                     nx * ny * sizeof(float));
-        snrs_ptr[r]    = res.snr;
-        periods_ptr[r] = res.period;
+
+        // First-phase uvgrid
+        std::memcpy(first_grids_ptr + r * (nx * ny),
+                    res.uvgrid.data(),
+                    nx * ny * sizeof(std::complex<float>));
+
+        snrs_ptr[r]    = res.best_snr;
+        periods_ptr[r] = res.trial_period;
     }
 
     py::dict out;
-    out["images"]  = images;   // (Nperiod, ny, nx)
-    out["snrs"]    = snrs;     // (Nperiod,)
-    out["periods"] = periods;  // (Nperiod,)
+    out["images"]       = images;       // (Nperiod, ny, nx)
+    out["snrs"]         = snrs;         // (Nperiod,)
+    out["periods"]      = periods;      // (Nperiod,)
+    out["first_images"] = first_images; // (Nperiod, ny, nx)
+    out["first_grids"]  = first_grids;  // (Nperiod, ny, nx)
 
     return out;
 }
