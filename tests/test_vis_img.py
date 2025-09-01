@@ -41,7 +41,7 @@ print(d)
 for img, first_img, first_grid, period in zip(d[0]["images"], d[0]["first_images"], d[0]["first_grids"], d[0]["periods"]):
     fig, axs = plt.subplots(1,3, figsize=(10,4))
     grid_ = np.fft.fftshift(np.abs(first_grid))
-    grid_[grid_<1e-3] = np.nan
+    grid_[grid_<1e-1] = np.nan
     axs[0].imshow(grid_, origin='lower', interpolation='none', aspect='auto')
     axs[1].imshow(first_img, origin='lower', interpolation='none', aspect='auto')
     axs[2].imshow(img, origin='lower', interpolation='none', aspect='auto')
