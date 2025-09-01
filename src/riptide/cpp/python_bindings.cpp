@@ -791,7 +791,7 @@ PYBIND11_MODULE(libcpp, m)
         py::arg("trial_periods"),
         py::arg("nx"),
         py::arg("ny"),
-    ) {
+    );
 
     //    py::list py_blocks,
     // py::array_t<size_t> uv_indices, // shape (M, 2)
