@@ -39,7 +39,7 @@ d = all_results[0]
 print(d)
 
 for img, first_img, first_grid, period in zip(d[0]["images"], d[0]["first_images"], d[0]["first_grids"], d[0]["periods"]):
-    fig, axs = plt.subplots(1,3, figsize(10,4))
+    fig, axs = plt.subplots(1,3, figsize=(10,4))
     axs[0].imshow(np.abs(first_grid))
     axs[1].imshow(first_img)
     axs[2].imshow(img)
