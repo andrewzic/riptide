@@ -634,7 +634,7 @@ class VisWorkerPool(object):
         # TESTING - 1Jy 160s period at phase centre
         ###
 
-        signal = np.zeros((dense_uv_ts.shape[1]))
+        signal = np.zeros((dense_uv_ts.shape[1]), dtype=np.complex64)
         times = np.arange(0, dense_uv_ts.shape[1]*tsamp, tsamp)
         period = 160.0
         phases = (times+0.5*period) % period / period
