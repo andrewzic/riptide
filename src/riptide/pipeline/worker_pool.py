@@ -614,6 +614,7 @@ class VisWorkerPool(object):
         # each row of the 2D array has a filled time series of size nsamp
         print("made DGA")
         dense_uv_ts = vis_ts.dga
+
         # uv_mask = vis_ts.data.max(axis=0) != 0  # shape (U, V)
         # print("UV mask shape:", uv_mask.shape)
         # u_coords, v_coords = uv_mask.coords  # 1D arrays of active indices
@@ -628,6 +629,18 @@ class VisWorkerPool(object):
         # import matplotlib.pyplot as plt
         # plt.imshow(grid_)
         # plt.show()
+
+        ###
+        # TESTING - 1Jy 160s period at phase centre
+        ###
+
+        signal = np.zeros((dense_uv_ts.shape[1]))
+        times = np.arange(0, dense_uv_ts.shape[1]*tsamp, tsamp)
+        period = 160.0
+        phases = (times+0.5*period) % period / period
+        fake_oninds = np.abs(phases - 0.5) < 2*tsamp / period
+        signal[fake_oninds] = 1.0 + 1j*0.0
+        dense_uv_ts[None, :] += signal
 
         for conf in self.range_confs:
             kw_search = dict(conf["ffa_search"])
