@@ -21,7 +21,7 @@ from riptide import VisTimeSeries, vis_ffa_search
 import pandas as pd
 import  matplotlib.pyplot as plt
 
-config = "example_vis_70.yaml"
+config = "example_vis_160.yaml"
 pipe = VisPipeline.from_yaml_config(config)
 
 #big ones
@@ -41,12 +41,23 @@ print(d)
 for img, first_img, first_grid, period in zip(d[0]["images"], d[0]["first_images"], d[0]["first_grids"], d[0]["periods"]):
     fig, axs = plt.subplots(1,3, figsize=(10,4))
     grid_ = np.fft.fftshift(np.abs(first_grid))
-    grid_[grid_<1e-1] = np.nan
+    grid_[grid_<1e-3] = np.nan
     axs[0].imshow(grid_, origin='lower', interpolation='none', aspect='auto')
     axs[1].imshow(first_img, origin='lower', interpolation='none', aspect='auto')
     axs[2].imshow(img, origin='lower', interpolation='none', aspect='auto')
     plt.title(f"P={period:.3f}")
     plt.show()
+
+
+# for img, first_img, first_grid, period in zip(d[0]["images"], d[0]["first_images"], d[0]["first_grids"], d[0]["periods"]):
+#     fig, axs = plt.subplots(1,3, figsize=(10,4))
+#     grid_ = np.fft.fftshift(np.abs(first_grid))
+#     grid_[grid_<1e-1] = np.nan
+#     axs[0].imshow(grid_, origin='lower', interpolation='none', aspect='auto')
+#     axs[1].imshow(first_img, origin='lower', interpolation='none', aspect='auto')
+#     axs[2].imshow(img, origin='lower', interpolation='none', aspect='auto')
+#     plt.title(f"P={period:.3f}")
+#     plt.show()
 
 # for res in all_results:
 #     plt.imshow()
