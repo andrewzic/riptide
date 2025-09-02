@@ -639,7 +639,7 @@ class VisWorkerPool(object):
         period = 160.0
         phases = (times+0.5*period) % period / period
         fake_oninds = np.abs(phases - 0.5) < 2*tsamp / period
-        signal[fake_oninds] = 1.0 + 1j*0.0
+        signal[fake_oninds] = 0.2 + 1j*0.0
         dense_uv_ts[None, :] += signal
 
         for conf in self.range_confs:
