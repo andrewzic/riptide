@@ -43,8 +43,8 @@ for img, first_img, first_grid, period in zip(d[0]["images"], d[0]["first_images
     grid_ = np.fft.fftshift(np.abs(first_grid))
     grid_[grid_<1e-1] = np.nan
     axs[0].imshow(grid_, origin='lower', interpolation='none', aspect='auto')
-    axs[1].imshow(first_img, origin='lower', interpolation='none', aspect='auto', vmin=-0.05, vmax=0.05)
-    axs[2].imshow(img, origin='lower', interpolation='none', aspect='auto', vmin=-0.2, vmax=0.2)
+    axs[1].imshow(first_img, origin='lower', interpolation='none', aspect='auto', vmin=-0.001, vmax=0.001)
+    axs[2].imshow(img, origin='lower', interpolation='none', aspect='auto', vmin=0.2, vmax=1.0)
     plt.title(f"P={period:.3f}")
     plt.show()
 
