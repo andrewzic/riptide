@@ -3,7 +3,10 @@ import warnings
 
 ##### Non-standard imports #####
 import numpy as np
-import sparse
+try:
+    import sparse
+except ImportError:
+    sparse = None
 from astropy.io import fits
 from astropy.wcs import WCS
 from astropy.coordinates import SkyCoord, SkyOffsetFrame
@@ -45,6 +48,9 @@ class TimeSeries(object):
     """
 
     def __init__(self, data, tsamp, metadata=None, copy=False, dtype=None):
+        if dtype is None:
+            dtype = np.complex64 if np.iscomplexobj(data) else np.float32
+
         if copy:
             self._data = np.asarray(data, dtype=dtype).copy()
         else:
@@ -55,10 +61,7 @@ class TimeSeries(object):
         # Carrying a tobs attribute is quite practical in later stages of
         # the pipeline (peak detection in periodograms)
         self.metadata["tobs"] = self.length
-        if dtype is None:
-            self.dtype = np.float32
-        else:
-            self.dtype = dtype #probably want to check this is somethign sensible here
+        self.dtype = self._data.dtype
 
     @property
     def data(self):
@@ -89,18 +92,19 @@ class TimeSeries(object):
         out : TimeSeries or None
             The normalised TimeSeries, if 'inplace' was set to False
         """
-        # NOTE: use float64 accumulator to avoid saturation issues when the
-        # data have large values
-        m = self.data.mean(dtype=np.complex128, axis=0) #complex
-        v = self.data.var(dtype=np.complex128, axis=0) #real and positive
-        norm = v**0.5
+        if np.iscomplexobj(self.data):
+            norm = self.data.var(dtype=np.complex128, axis=0)**0.5
+            norm_data = self.data / norm
+        else:
+            m = self.data.mean(dtype=np.float64, axis=0)
+            norm = self.data.std(dtype=np.float64, axis=0)
+            norm_data = (self.data - m) / norm
 
         if inplace:
-            # i think we don't want to mean subtract as that will mess complex phases
-            self._data = (self.data ) / norm 
+            self._data = norm_data
         else:
             return TimeSeries(
-                (self.data ) / norm, self.tsamp, metadata=self.metadata, dtype=self.dtype
+                norm_data, self.tsamp, metadata=self.metadata, dtype=self.dtype
             )
 
     @timing
@@ -311,7 +315,7 @@ class TimeSeries(object):
             TimeSeries object.
         """
         data = np.load(fname)
-        return cls(data, tsamp, copy=False, dtype=type(data))
+        return cls(data, tsamp, copy=False)
 
     @classmethod
     @timing
@@ -459,7 +463,7 @@ class VisTimeSeries(object):
     def __init__(self, data, tsamp, metadata=None, copy=False, nu=None, nv=None, du=None, dv=None, phase_centre=None, dtype=None, header=None):
         if copy:
             self._data = np.ascontiguousarray(data, dtype=np.complex64).copy()
-        elif isinstance(data, sparse.COO):
+        elif sparse is not None and isinstance(data, sparse.COO):
             self._data = data
         else:
             self._data = np.ascontiguousarray(data, dtype=np.complex64)
@@ -518,7 +522,10 @@ class VisTimeSeries(object):
             self.get_sparse_unique_uv()
         u_coords = self.unique_uv[:, 0]
         v_coords = self.unique_uv[:, 1]
-        dynamic_grid_array = np.ascontiguousarray(np.transpose(self.data[:, u_coords, v_coords].todense()))
+        sub = self.data[:, u_coords, v_coords]
+        if hasattr(sub, "todense"):
+            sub = sub.todense()
+        dynamic_grid_array = np.ascontiguousarray(np.transpose(sub))
         self.data = None
         self.dga = dynamic_grid_array
         
@@ -768,7 +775,7 @@ class VisTimeSeries(object):
         return cls(data, tsamp, copy=False, metadata=metadata)
 
     @classmethod
-    def from_real_imag_cube(cls, real_cube_file, imag_cube_file, threshold=3e-3):
+    def from_real_imag_cube(cls, real_cube_file, imag_cube_file, threshold=3e-3, tsamp=None):
 
         with fits.open(real_cube_file, memmap=True) as real_hdul, fits.open(imag_cube_file, memmap=True) as imag_hdul:
 
@@ -778,9 +785,12 @@ class VisTimeSeries(object):
             nv = header["NAXIS2"]
             du = header["CDELT1"]
             dv = header["CDELT2"]
-            ctype = "TIME" #hard coded
-            fits_idx = wcs.axis_type_names.index(ctype) + 1
-            tsamp = float(header[f"CDELT{fits_idx}"])
+            if tsamp is None:
+                try:
+                    fits_idx = wcs.axis_type_names.index("TIME") + 1
+                    tsamp = float(header[f"CDELT{fits_idx}"])
+                except (ValueError, KeyError):
+                    tsamp = 0.110
             print(real_hdul[0])
             print(real_hdul[0].data.shape)
             real_data = np.nan_to_num(real_hdul[0].data.squeeze(), nan=0.0, posinf=0.0, neginf=0.0)
@@ -789,17 +799,20 @@ class VisTimeSeries(object):
             data = real_data + 1j * imag_data
 
             # Apply threshold
-            sparse_grid = sparse.COO(np.where(np.abs(data) > threshold, data, 0))
+            if sparse is not None:
+                grid = sparse.COO(np.where(np.abs(data) > threshold, data, 0))
+            else:
+                grid = np.where(np.abs(data) > threshold, data, 0).astype(np.complex64)
 
-        return cls(sparse_grid, tsamp, dtype=sparse_grid.dtype, nu=nu, nv=nv, du=du, dv=dv, header=header)
+        return cls(grid, tsamp, dtype=grid.dtype, nu=nu, nv=nv, du=du, dv=dv, header=header)
 
     @classmethod
-    def from_real_imag_cube_chunked(cls, real_cube_file, imag_cube_file, u_slice=None, v_slice=None, threshold=3e-3):
+    def from_real_imag_cube_chunked(cls, real_cube_file, imag_cube_file, u_slice=None, v_slice=None, threshold=3e-3, tsamp=None):
         """
         Load only a chunk of the cube along (u, v) dimensions.
         If u_slice or v_slice are None, take the full range in that dimension.
         """
-        print(f"in here with {u_slice.start}, {u_slice.stop}; {v_slice.start}, {v_slice.stop}")
+        print(f"in here with {u_slice.start if u_slice else 0}, {u_slice.stop if u_slice else None}; {v_slice.start if v_slice else 0}, {v_slice.stop if v_slice else None}")
         with fits.open(real_cube_file, memmap=True) as real_hdul, fits.open(imag_cube_file, memmap=True) as imag_hdul:
 
             header = real_hdul[0].header
@@ -808,32 +821,39 @@ class VisTimeSeries(object):
             nv = header["NAXIS2"]
             du = header["CDELT1"]
             dv = header["CDELT2"]
-            ctype = "TIME"
-            fits_idx = wcs.axis_type_names.index(ctype) + 1
-            tsamp = float(header[f"CDELT{fits_idx}"])
+            if tsamp is None:
+                try:
+                    fits_idx = wcs.axis_type_names.index("TIME") + 1
+                    tsamp = float(header[f"CDELT{fits_idx}"])
+                except (ValueError, KeyError):
+                    tsamp = 0.110
 
-            # default full slices
-            u_slice = slice(0, nu) if u_slice is None else u_slice
-            v_slice = slice(0, nv) if v_slice is None else v_slice
+            # default full slices (axis -2 is V of size nv, axis -1 is U of size nu)
+            u_slice = slice(0, nv) if u_slice is None else u_slice
+            v_slice = slice(0, nu) if v_slice is None else v_slice
 
-            # load just the requested chunk
-            real_data = real_hdul[0].data[..., u_slice, v_slice] #, nan=0.0, posinf=0.0, neginf=0.0)
-            imag_data = imag_hdul[0].data[..., u_slice, v_slice] #, nan=0.0, posinf=0.0, neginf=0.0)
+            # load just the requested chunk and sanitize NaNs/Infs
+            real_data = np.nan_to_num(real_hdul[0].data[..., u_slice, v_slice], nan=0.0, posinf=0.0, neginf=0.0)
+            imag_data = np.nan_to_num(imag_hdul[0].data[..., u_slice, v_slice], nan=0.0, posinf=0.0, neginf=0.0)
 
-            data = (real_data + 1j * imag_data).squeeze() #get rid of redundant dimensions
+            raw = real_data + 1j * imag_data
+            # Squeeze only leading singleton axes (e.g. STOKES, FREQ), preserving (Nt, chunk_v, chunk_u)
+            squeeze_axes = tuple(i for i in range(raw.ndim - 2) if raw.shape[i] == 1 and raw.ndim - len([j for j in range(raw.ndim - 2) if raw.shape[j] == 1]) >= 3)
+            if raw.ndim > 3:
+                data = raw.reshape(-1, raw.shape[-2], raw.shape[-1])
+            else:
+                data = raw
             print(f"size of data is {data.nbytes}")
-            # real = da.from_array(real_hdul[0].data, chunks=(time_chunk, u_chunk, v_chunk))
-            # imag = da.from_array(imag_hdul[0].data, chunks=(time_chunk, u_chunk, v_chunk))
-            # data = da.map_blocks(lambda r, i: r + 1j*i, real, imag)
-            # data = da.where(da.abs(data) > threshold, data, 0)
-
 
             # Apply threshold
-            sparse_grid = sparse.COO(np.where(np.abs(data) > threshold, data, 0))
+            if sparse is not None:
+                grid = sparse.COO(np.where(np.abs(data) > threshold, data, 0))
+            else:
+                grid = np.where(np.abs(data) > threshold, data, 0).astype(np.complex64)
 
-        return cls(sparse_grid, tsamp, dtype=sparse_grid.dtype,
-                   nu=u_slice.stop - u_slice.start,
-                   nv=v_slice.stop - v_slice.start,
+        return cls(grid, tsamp, dtype=grid.dtype,
+                   nu=v_slice.stop - v_slice.start,
+                   nv=u_slice.stop - u_slice.start,
                    du=du, dv=dv, header=header)
     
     # @classmethod
@@ -1029,7 +1049,7 @@ class VisTimeSeries(object):
     def index(self, ind):
         """grabs one index of multi dimensional array and returns TimeSeries object for 1D ts data"""
         return TimeSeries.from_dict({
-            "data": self.data[:, *ind].todense(),
+            "data": self.data[(slice(None),) + tuple(ind)].todense(),
             "tsamp": self.tsamp,
             "metadata": self.metadata
             }, 
@@ -1038,4 +1058,4 @@ class VisTimeSeries(object):
     
     def index_np(self, ind):
         """grabs one index of multi dimensional array and returns TimeSeries object for 1D ts data"""
-        return self.data[:, *ind].todense()
+        return self.data[(slice(None),) + tuple(ind)].todense()

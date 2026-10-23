@@ -60,24 +60,28 @@ def plan_ffa(nsamp, tsamp, period_min, period_max, bins_min, bins_max):
             - 'rows_eval' (rows used in FFA transform)
     """
 
-    # Initial downsampling factor
-    ds_ini = period_min / (tsamp * bins_min)
+    # Initial downsampling factor (clamp to >= 1.0 to avoid upsampling)
+    effective_period_min = max(float(period_min), float(tsamp) * int(bins_min))
+    ds_ini = effective_period_min / (tsamp * bins_min)
 
     # Geometric growth factor
     ds_geo = (bins_max + 1.0) / bins_min
 
     # Number of required downsampling cycles
-    num_downsamplings = int(np.ceil(np.log(period_max / period_min) / np.log(ds_geo)))
+    num_downsamplings = max(1, int(np.ceil(np.log(period_max / effective_period_min) / np.log(ds_geo))))
 
     plan = []
 
     for ids in range(num_downsamplings):
         f = ds_ini * (ds_geo ** ids)      # current downsampling factor
         tau = f * tsamp                   # effective sample time
-        n = downsampled_size(nsamp, f)     # downsampled input nsamp
+        n = downsampled_size(nsamp, f)    # downsampled input nsamp
         period_max_samples = period_max / tau
 
-        bstart = bins_min
+        if ids == 0 and period_min < tsamp * bins_min:
+            bstart = max(2, int(np.floor(period_min / tau)))
+        else:
+            bstart = bins_min
         bstop = min(bins_max, n, int(period_max_samples))
 
         for bins in range(bstart, bstop + 1):
@@ -87,6 +91,8 @@ def plan_ffa(nsamp, tsamp, period_min, period_max, bins_min, bins_max):
 
             period_ceil = min(period_max_samples, bins + 1.0)
             rows_eval = min(rows, ceilshift(rows, bins, period_ceil))
+            if rows_eval <= 0:
+                continue
 
             base_period = tau * bins
 

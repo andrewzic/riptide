@@ -25,7 +25,10 @@ from riptide.pipeline.harmonic_testing import htest
 from riptide.serialization import save_json
 from riptide.timing import timing
 
-from dask.distributed import Client, LocalCluster
+try:
+    from dask.distributed import Client, LocalCluster
+except ImportError:
+    Client = LocalCluster = None
 try:
     from dask_jobqueue import SLURMCluster
 except ImportError:
@@ -545,11 +548,10 @@ class VisPipeline(object):
         # )
         # validate_ranges(conf["ranges"], tsamp_max)
 
-        # NOTE: call dmiter.prepare() first. Before that, dmiter.tsloader is None
         self.worker_pool = VisWorkerPool(
             conf["ranges"],
             processes=conf["processes"],
-            psf_img_file=conf["psf_img_file"],
+            psf_img_file=conf.get("psf_img_file", None),
             fmt=conf["data"]["format"],
         )
         log.info("Pipeline ready")

@@ -51,7 +51,7 @@ namespace riptide {
         transform(input.head(), out.head(), temp.head());
         transform(input.tail(), out.tail(), temp.tail());
 
-        merge(input.head(), input.tail(), out);
+        merge(temp.head().as_const(), temp.tail().as_const(), out);
     }
 
     // Wrapper for raw pointers

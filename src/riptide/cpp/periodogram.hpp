@@ -6,6 +6,9 @@
 #include <cmath>
 #include <memory>
 #include <complex>
+#include <vector>
+#include <algorithm>
+#include <stdexcept>
 
 #include "downsample.hpp"
 #include "transforms.hpp"
@@ -16,14 +19,14 @@
 namespace riptide {
 
 
-void periodogram_check_arg(bool condition, std::string const& errmsg)
+inline void periodogram_check_arg(bool condition, std::string const& errmsg)
     {
     if (!(condition))
         throw std::invalid_argument(errmsg);
     }
 
 
-void periodogram_check_arguments(
+inline void periodogram_check_arguments(
     size_t size, 
     double tsamp,
     double period_min, 
@@ -52,7 +55,7 @@ correspond to period trials smaller than p + 1. The index of the last row
 to evaluate is equal to ceilshift - 1, or equivalently, the total number
 of rows to evaluate is equal to ceilshift.
 */
-size_t ceilshift(size_t rows, size_t cols, double pmax)
+inline size_t ceilshift(size_t rows, size_t cols, double pmax)
     {
     return ceil(cols * (rows - 1.0) * (1.0 - cols / pmax));
     }
@@ -61,7 +64,7 @@ size_t ceilshift(size_t rows, size_t cols, double pmax)
 /*
 Returns the total number of trial periods in a periodogram
 */
-size_t periodogram_length(
+inline size_t periodogram_length(
     size_t size,
     double tsamp,
     double period_min,
@@ -110,9 +113,9 @@ size_t periodogram_length(
     }
 
 /*
-Returns the total number of trial periods in a periodogram
+Returns the total number of base periods in a visibility FFA transform
 */
-size_t periodogram_base_period_length(
+inline size_t periodogram_base_period_length(
     size_t size,
     double tsamp,
     double period_min,
@@ -131,7 +134,7 @@ size_t periodogram_base_period_length(
 
     // Number of required downsampling cycles
     size_t num_downsamplings = ceil(log(period_max / period_min) / log(ds_geo));
-    size_t length = 0; // total number of period trials, to be calculated
+    size_t length = 0; // total number of base period trials, to be calculated
 
     /* Downsampling loop */
     for (size_t ids = 0; ids < num_downsamplings; ++ids)
@@ -141,18 +144,15 @@ size_t periodogram_base_period_length(
         const double period_max_samples = period_max / tau;
         const size_t n = downsampled_size(size, f); // current number of input samples
 
-        // Min and max number of bins with which to FFA transform in order to
-        // cover all trial periods between period_min and period_max.
-        // NOTE: bstop is INclusive
-        // Also, we MUST enforce bstop <= n, to avoid doing an FFA transform with 0 rows
         const size_t bstart = bins_min;
         const size_t bstop = std::min({ bins_max, n, size_t(period_max_samples) });
 
         /* FFA transform loop */
         for (size_t bins = bstart; bins <= bstop; ++bins)
             {
+            const size_t rows = n / bins;
+            if (rows < 2) continue;
             length += 1;
-            // #1 extra base period FFA transform per base_period=bins
             }
         }
     return length;
@@ -164,7 +164,7 @@ Compute the periodogram of a time series that has been normalised to zero mean a
 Outputs are: trial periods (num_periods elements), number of phase bins used in the fold (num_periods elements), 
 and signal to noise ratio (num_periods * num_widths elements)
 */
-void periodogram(
+inline void periodogram(
     const float* __restrict__ data,
     size_t size,
     double tsamp,
@@ -178,79 +178,79 @@ void periodogram(
     uint32_t* __restrict__ foldbins,
     float* __restrict__ snr)
     {
-//     periodogram_check_arguments(size, tsamp, period_min, period_max, bins_min, bins_max);
+    periodogram_check_arguments(size, tsamp, period_min, period_max, bins_min, bins_max);
 
-//     // Initial downsampling factor
-//     // We want: ds_ini * tsamp * bmin = period_min
-//     double ds_ini = period_min / (tsamp * bins_min);
+    // Initial downsampling factor
+    // We want: ds_ini * tsamp * bmin = period_min
+    double ds_ini = period_min / (tsamp * bins_min);
 
-//     // Geometric growth factor for the downsampling factor
-//     double ds_geo = (bins_max + 1.0) / bins_min;
+    // Geometric growth factor for the downsampling factor
+    double ds_geo = (bins_max + 1.0) / bins_min;
 
-//     // Number of required downsampling cycles
-//     size_t num_downsamplings = ceil(log(period_max / period_min) / log(ds_geo));
+    // Number of required downsampling cycles
+    size_t num_downsamplings = ceil(log(period_max / period_min) / log(ds_geo));
 
-//     // Allocate buffers
-//     const size_t bufsize = downsampled_size(size, ds_ini);
-//     std::unique_ptr<float[]> input_mem(new float[bufsize]);
-//     std::unique_ptr<float[]> ffabuf_mem(new float[bufsize]);
-//     std::unique_ptr<float[]> ffaout_mem(new float[bufsize]);
-//     const float* input = input_mem.get();
-//     float* ffabuf = ffabuf_mem.get();
-//     float* ffaout = ffaout_mem.get();
+    // Allocate buffers
+    const size_t bufsize = downsampled_size(size, ds_ini);
+    std::unique_ptr<float[]> input_mem(new float[bufsize]);
+    std::unique_ptr<float[]> ffabuf_mem(new float[bufsize]);
+    std::unique_ptr<float[]> ffaout_mem(new float[bufsize]);
+    const float* input = input_mem.get();
+    float* ffabuf = ffabuf_mem.get();
+    float* ffaout = ffaout_mem.get();
         
-//     /* Downsampling loop */
-//     for (size_t ids = 0; ids < num_downsamplings; ++ids)
-//         {
-//         const double f = ds_ini * pow(ds_geo, ids); // current downsampling factor
-//         const double tau = f * tsamp; // current sampling time
-//         const double period_max_samples = period_max / tau;
-//         const size_t n = downsampled_size(size, f); // current number of input samples
+    /* Downsampling loop */
+    for (size_t ids = 0; ids < num_downsamplings; ++ids)
+        {
+        const double f = ds_ini * pow(ds_geo, ids); // current downsampling factor
+        const double tau = f * tsamp; // current sampling time
+        const double period_max_samples = period_max / tau;
+        const size_t n = downsampled_size(size, f); // current number of input samples
 
-//         // downsample() requires f > 1, but we still allow searching the data at their
-//         // original resolution.
-//         if (f == 1) {
-//             input = data;
-//         }            
-//         else {
-//             downsample(data, size, f, input_mem.get());
-//             input = input_mem.get();
-//         }
+        // downsample() requires f > 1, but we still allow searching the data at their
+        // original resolution.
+        if (f == 1) {
+            input = data;
+        }            
+        else {
+            downsample(data, size, f, input_mem.get());
+            input = input_mem.get();
+        }
 
-//         // Min and max number of bins with which to FFA transform in order to
-//         // cover all trial periods between period_min and period_max.
-//         // NOTE: bstop is INclusive
-//         // Also, we MUST enforce bstop <= n, to avoid doing an FFA transform with 0 rows
-//         const size_t bstart = bins_min;
-//         const size_t bstop = std::min({ bins_max, n, size_t(period_max_samples) });
+        // Min and max number of bins with which to FFA transform in order to
+        // cover all trial periods between period_min and period_max.
+        // NOTE: bstop is INclusive
+        // Also, we MUST enforce bstop <= n, to avoid doing an FFA transform with 0 rows
+        const size_t bstart = bins_min;
+        const size_t bstop = std::min({ bins_max, n, size_t(period_max_samples) });
 
-//         /* FFA transform loop */
-//         for (size_t bins = bstart; bins <= bstop; ++bins)
-//             {
-//             const size_t rows = n / bins;
-//             const float stdnoise = sqrt(rows * downsampled_variance(size, f));
-//             const double period_ceil = std::min(period_max_samples, bins + 1.0);
-//             const size_t rows_eval = std::min(rows, ceilshift(rows, bins, period_ceil));
+        /* FFA transform loop */
+        for (size_t bins = bstart; bins <= bstop; ++bins)
+            {
+            const size_t rows = n / bins;
+            const float stdnoise = sqrt(rows * downsampled_variance(size, f));
+            const double period_ceil = std::min(period_max_samples, bins + 1.0);
+            const size_t rows_eval = std::min(rows, ceilshift(rows, bins, period_ceil));
 
-//             transform(input, rows, bins, ffabuf, ffaout);
+            transform(input, rows, bins, ffabuf, ffaout);
             
-//             auto block = ConstBlock(ffaout, rows_eval, bins);
-//             snr2(block, widths, num_widths, stdnoise, snr);
+            auto block = ConstBlock(ffaout, rows_eval, bins);
+            snr2(block, widths, num_widths, stdnoise, snr);
 
-//             for (size_t s = 0; s < rows_eval; ++s)
-//                 {
-//                 periods[s] = tau * bins * bins / (bins - s / (rows - 1.0));
-//                 foldbins[s] = bins;
-//                 }
+            for (size_t s = 0; s < rows_eval; ++s)
+                {
+                periods[s] = tau * bins * bins / (bins - s / (rows - 1.0));
+                foldbins[s] = bins;
+                }
 
-//             snr += rows_eval * num_widths;
-//             periods += rows_eval;
-//             foldbins += rows_eval;
-//             }
-//         }
+            snr += rows_eval * num_widths;
+            periods += rows_eval;
+            foldbins += rows_eval;
+            }
+        }
     }
 
-void vis_ffa_transform(
+inline void vis_ffa_transform(
     const std::complex<float>* __restrict__ vis_data,
     size_t size,
     double tsamp,
@@ -284,9 +284,10 @@ void vis_ffa_transform(
     std::unique_ptr<std::complex<float>[]> ffabuf_mem(new std::complex<float>[complex_bufsize]);
     std::unique_ptr<std::complex<float>[]> ffaout_mem(new std::complex<float>[complex_bufsize]);
     const std::complex<float>* input = input_mem.get();
-    //std::complex<float>* input = input_mem.get();
     std::complex<float>* ffabuf = ffabuf_mem.get();
     std::complex<float>* ffaout = ffaout_mem.get();
+
+    size_t i = 0;
 
     /* Downsampling loop */
     for (size_t ids = 0; ids < num_downsamplings; ++ids)
@@ -306,17 +307,15 @@ void vis_ffa_transform(
             input = input_mem.get();
         }
 
-        // Min and max number of bins with which to FFA transform in order to
-        // cover all trial periods between period_min and period_max.
-        // NOTE: bstop is INclusive
-        // Also, we MUST enforce bstop <= n, to avoid doing an FFA transform with 0 rows
         const size_t bstart = bins_min;
         const size_t bstop = std::min({ bins_max, n, size_t(period_max_samples) });
-        size_t i = 0;
+
         /* FFA transform loop */
         for (size_t bins = bstart; bins <= bstop; ++bins)
             {
             const size_t rows = n / bins;
+            if (rows < 2) continue;
+
             const double period_ceil = std::min(period_max_samples, bins + 1.0);
             const size_t rows_eval = std::min(rows, ceilshift(rows, bins, period_ceil));
             
@@ -342,60 +341,76 @@ void vis_ffa_transform(
             base_periods[i] = tau * bins;
             tsamps[i] = tau;
             ++i;
-
             }
         }
     }
 
 /**
- * Perform FFA transform on all UV-cell time series at a given base period (bins).
+ * Perform FFA transform on all UV-cell time series at a given base period (bins),
+ * with optional on-the-fly complex downsampling and rows_eval slicing.
  *
- * @param vis_data   Pointer to dense array of shape (N_uv, nsamp) stored row-major.
- *                   Each row is a time series for one UV cell.
- * @param N_uv       Number of UV cells (first dimension).
- * @param nsamp      Number of time samples (second dimension).
- * @param bins       Number of bins (base period folding factor).
- * @param out        Output buffer (N_uv * rows * bins). Caller allocates.
- *                   The output for UV cell i is stored at offset i * (rows * bins).
+ * @param vis_data          Pointer to dense array of shape (N_uv, nsamp) stored row-major.
+ * @param N_uv              Number of UV cells (first dimension).
+ * @param nsamp             Number of time samples (second dimension).
+ * @param bins              Number of bins (base period folding factor).
+ * @param tsamp             Effective sampling interval tau = downsample_factor * native_tsamp.
+ * @param out               Output buffer (N_uv * actual_rows_eval * bins). Caller allocates.
+ * @param periods_out       Output vector of evaluated trial periods (length actual_rows_eval).
+ * @param rows_eval         Number of shift rows to retain (0 means retain all rows = n / bins).
+ * @param downsample_factor Downsampling factor f >= 1.0 applied before folding.
  */
-void vis_ffa_transform_basep(
+inline void vis_ffa_transform_basep(
     const std::complex<float>* __restrict__ vis_data,
     size_t N_uv,
     size_t nsamp,
     size_t bins,
     double tsamp,
     std::complex<float>* __restrict__ out,
-    std::vector<double>& periods_out
+    std::vector<double>& periods_out,
+    size_t rows_eval = 0,
+    double downsample_factor = 1.0
 ) {
+    const bool do_downsample = (downsample_factor > 1.0);
+    const size_t n = do_downsample ? downsampled_size(nsamp, downsample_factor) : nsamp;
+
     // Number of rows in folding matrix
-    const size_t rows = nsamp / bins;
+    const size_t rows = n / bins;
     if (rows < 2) {
         throw std::runtime_error("vis_ffa_transform_basep: not enough rows for given bins.");
     }
 
+    const size_t actual_rows_eval = (rows_eval > 0 && rows_eval < rows) ? rows_eval : rows;
+
     // Compute periods vector (same for all uv-cells)
-    periods_out.resize(rows);
-    double tau = tsamp;  // current sampling time (no downsampling in this basep mode)
-    for (size_t s = 0; s < rows; ++s) {
+    periods_out.resize(actual_rows_eval);
+    const double tau = tsamp;
+    for (size_t s = 0; s < actual_rows_eval; ++s) {
         periods_out[s] = tau * bins * bins / (bins - s / (rows - 1.0));
     }
 
     // Temporary buffers for single-series transform
+    std::vector<std::complex<float>> dsbuf(do_downsample ? n : 0);
     std::vector<std::complex<float>> ffabuf(rows * bins);
     std::vector<std::complex<float>> ffaout(rows * bins);
 
     // Iterate over all UV cells
     for (size_t iuv = 0; iuv < N_uv; ++iuv) {
-        // Pointer to this UV cell's time series
         const std::complex<float>* ts = vis_data + iuv * nsamp;
+        const std::complex<float>* input_ts = ts;
 
-        // Run FFA transform for this UV cell
-        transform(ts, rows, bins, ffabuf.data(), ffaout.data());
+        if (do_downsample) {
+            complex_downsample(ts, nsamp, downsample_factor, dsbuf.data());
+            input_ts = dsbuf.data();
+        }
 
-        // Copy result into output cube at correct offset
-        std::complex<float>* out_ptr = out + iuv * rows * bins;
-        std::copy(ffaout.begin(), ffaout.end(), out_ptr);
+        // Run FFA transform for this UV cell using all rows
+        transform(input_ts, rows, bins, ffabuf.data(), ffaout.data());
+
+        // Copy the first actual_rows_eval rows into output cube at correct offset
+        std::complex<float>* out_ptr = out + iuv * actual_rows_eval * bins;
+        std::copy(ffaout.begin(), ffaout.begin() + (actual_rows_eval * bins), out_ptr);
     }
 }
-}
+
+} // namespace riptide
 #endif // PERIODOGRAM_HPP

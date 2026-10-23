@@ -99,7 +99,9 @@ def vis_ffa_search_basep(
     dynamic_grid_array,
     base_period, #in bins
     uv_inds,
-    tsamp
+    tsamp,
+    rows_eval=0,
+    downsample_factor=1.0
 ):  
     """
     Run a FFA search of a multiple visibility timeseries to produce ffa blocks for a given base period
@@ -110,33 +112,25 @@ def vis_ffa_search_basep(
         The dense visibility time series array to search - should be N_uv x N_t
     base_period:
         The (integer) base period to fold at in bins
+    rows_eval : int, optional
+        Number of shift rows to evaluate (0 means all rows)
+    downsample_factor : float, optional
+        Downsampling factor (>= 1.0) to apply before folding
 
     Returns
     -------
-    ts : TimeSeries
-        The de-reddened and normalised time series that was actually searched
-    ffa_result : UV_FFA
-        The output of the search, which contains among other things a list of 2D arrays
-        the input visibilities folded at different base periods
+    ffa_result : UV_FFA_basep
+        The output of the search, which contains the 3D array of folded visibilities
     """
-    ### Prepare data: deredden then normalise IN THAT ORDER
-    #shouldn't do this on visibility data hence deredden = False and already_normalised = True by default
-
-    #below is akin to periodogram but preserves pulse phase information, 
-    # keeping FFA results in butterfly blocks
     ffa_grid_array, periods = libcpp.vis_ffa_transform_basep(
-        dynamic_grid_array, base_period, tsamp
+        dynamic_grid_array,
+        base_period,
+        tsamp,
+        int(rows_eval),
+        float(downsample_factor)
     )
 
     foldbins = np.array([base_period for p in periods])
-
-    # def __init__(self, uv_inds, periods, foldbins, base_period, tsamp, ffa_array, metadata=None):
-    #     self.uv_inds = uv_inds
-    #     self.periods = periods
-    #     self.foldbins = foldbins
-    #     self.base_periods = base_period
-    #     self.tsamps = tsamp
-    #     self.ffa_array = ffa_array
 
     ffa_result = UV_FFA_basep(uv_inds, periods, foldbins, base_period, tsamp, ffa_grid_array)
     return ffa_result
@@ -146,7 +140,6 @@ def vis_ffa_search_basep(
 def vis_ffa_image_candidates(
     ffa_blocks,
     uv_indices,
-    psf_image,
     periods,
     nx,
     ny,
@@ -166,8 +159,6 @@ def vis_ffa_image_candidates(
         Each block is a (nperiod, nphase) folded visibility from FFA.
     uv_indices : np.ndarray, shape (M, 2), int
         Integer (u, v) indices for each block.
-    psf_image : np.ndarray, shape (ny, nx), float
-        Real-valued PSF image in image space.
     nx, ny : int
         Output image dimensions.
     snr_thresh : float
@@ -186,24 +177,18 @@ def vis_ffa_image_candidates(
     candidates : list of dict
         Each dict has { 'x', 'y', 'snr', 'width_bins' }.
     """
-    # Validate input types/shapes
-    # if not isinstance(ffa_blocks, list) or not all(isinstance(b, np.ndarray) for b in ffa_blocks):
-    #     raise ValueError("ffa_blocks must be a list of numpy arrays (complex64)")
     uv_indices = np.asarray(uv_indices)
     if uv_indices.shape != (len(ffa_blocks), 2):
         raise ValueError("uv_indices must have shape (M, 2) matching ffa_blocks length")
-    if psf_image.shape != (ny, nx):
-        raise ValueError(f"psf_image must have shape ({ny}, {nx})")
     
     # Generate widths in bins
-    nbins = ffa_blocks[0].shape[1] #THIS WAS CHANGED FROM .shape[0]
+    nbins = ffa_blocks[0].shape[1]
     widths = generate_width_trials(nbins, ducy_max=ducy_max, wtsp=wtsp).astype(np.uint64)
 
     # Call C++ candidate search
     candidates = libcpp.image_ffa_candidates(
         ffa_blocks,
         uv_indices.astype(np.uint64, copy=False),
-        psf_image.astype(np.float32, copy=False),
         widths,
         np.array(periods, dtype=np.float32),
         nx,
@@ -213,20 +198,12 @@ def vis_ffa_image_candidates(
         max_candidates_all,
         mask_radius
     )   
-        # py::dict d;
-        # d["x"] = c.x;
-        # d["y"] = c.y;
-        # d["snr"] = c.snr;
-        # d["width"] = c.width_bins;  // width in bins
-        # d["period"]
-
     return candidates
 
 @timing
 def test_vis_ffa_image(
     ffa_blocks,
     uv_indices,
-    psf_image,
     nx,
     ny
 ):
@@ -239,57 +216,30 @@ def test_vis_ffa_image(
         Each block is a (phase, freq) folded visibility from FFA.
     uv_indices : np.ndarray, shape (M, 2), int
         Integer (u, v) indices for each block.
-    psf_image : np.ndarray, shape (ny, nx), float
-        Real-valued PSF image in image space.
     nx, ny : int
         Output image dimensions.
-    snr_thresh : float
-        Minimum SNR for a detection to be considered a candidate.
-    ducy_max, wtsp : float
-        Parameters for width trial generation.
-    max_candidates_width : int
-        Max candidates to keep for each width trial.
-    max_candidates_all : int
-        Max total candidates to keep across all widths.
-    mask_radius : int
-        Radius (in pixels) to mask around each found candidate.
 
     Returns
     -------
-    candidates : list of dict
-        Each dict has { 'x', 'y', 'snr', 'width_bins' }.
+    results : dict
     """
-    # Validate input types/shapes
-    # if not isinstance(ffa_blocks, list) or not all(isinstance(b, np.ndarray) for b in ffa_blocks):
-    #     raise ValueError("ffa_blocks must be a list of numpy arrays (complex64)")
     uv_indices = np.asarray(uv_indices)
     if uv_indices.shape != (len(ffa_blocks), 2):
         raise ValueError("uv_indices must have shape (M, 2) matching ffa_blocks length")
-    if psf_image.shape != (ny, nx):
-        raise ValueError(f"psf_image must have shape ({ny}, {nx})")
 
-    # Call C++ candidate search
+    # Call C++ test
     results = libcpp.image_ffa_test(
         ffa_blocks,
         uv_indices.astype(np.uint64, copy=False),
-        psf_image.astype(np.float32, copy=False),
         nx,
         ny
     )   
-        # py::dict d;
-        # d["x"] = c.x;
-        # d["y"] = c.y;
-        # d["snr"] = c.snr;
-        # d["width"] = c.width_bins;  // width in bins
-        # d["period"]
-
     return results
 
 @timing
 def test_vis_ffa_image_imgs(
     ffa_blocks,
     uv_indices,
-    psf_image,
     periods,
     nx,
     ny
@@ -303,50 +253,26 @@ def test_vis_ffa_image_imgs(
         Each block is a (phase, freq) folded visibility from FFA.
     uv_indices : np.ndarray, shape (M, 2), int
         Integer (u, v) indices for each block.
-    psf_image : np.ndarray, shape (ny, nx), float
-        Real-valued PSF image in image space.
+    periods : list or np.ndarray
+        Trial periods.
     nx, ny : int
         Output image dimensions.
-    snr_thresh : float
-        Minimum SNR for a detection to be considered a candidate.
-    ducy_max, wtsp : float
-        Parameters for width trial generation.
-    max_candidates_width : int
-        Max candidates to keep for each width trial.
-    max_candidates_all : int
-        Max total candidates to keep across all widths.
-    mask_radius : int
-        Radius (in pixels) to mask around each found candidate.
 
     Returns
     -------
-    candidates : list of dict
-        Each dict has { 'x', 'y', 'snr', 'width_bins' }.
+    results : list of dict
     """
-    # Validate input types/shapes
-    # if not isinstance(ffa_blocks, list) or not all(isinstance(b, np.ndarray) for b in ffa_blocks):
-    #     raise ValueError("ffa_blocks must be a list of numpy arrays (complex64)")
     uv_indices = np.asarray(uv_indices)
     if uv_indices.shape != (len(ffa_blocks), 2):
         raise ValueError("uv_indices must have shape (M, 2) matching ffa_blocks length")
-    if psf_image.shape != (ny, nx):
-        raise ValueError(f"psf_image must have shape ({ny}, {nx})")
 
-    # Call C++ candidate search
+    # Call C++ test
     results = libcpp.image_ffa_test_img(
         ffa_blocks,
         uv_indices.astype(np.uint64, copy=False),
-        psf_image.astype(np.float32, copy=False),
         periods,
         nx,
         ny
     )   
-        # py::dict d;
-        # d["x"] = c.x;
-        # d["y"] = c.y;
-        # d["snr"] = c.snr;
-        # d["width"] = c.width_bins;  // width in bins
-        # d["period"]
-
     return results
 

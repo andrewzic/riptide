@@ -122,46 +122,46 @@ double benchmark_ffa2(size_t rows, size_t cols, size_t loops)
 }
 
 
-// py::array_t<float> snr1(py::array_t<float> arr_x, py::array_t<size_t> arr_widths, float stdnoise)
-// {
-//     assert_c_contiguous(arr_x);
-//     assert_c_contiguous(arr_widths);
-//     auto x = arr_x.unchecked<1>();
-//     const size_t size = x.size();
+py::array_t<float> snr1(py::array_t<float> arr_x, py::array_t<size_t> arr_widths, float stdnoise)
+{
+    assert_c_contiguous(arr_x);
+    assert_c_contiguous(arr_widths);
+    auto x = arr_x.unchecked<1>();
+    const size_t size = x.size();
 
-//     auto widths = arr_widths.unchecked<1>();
-//     const size_t num_widths = widths.size();
+    auto widths = arr_widths.unchecked<1>();
+    const size_t num_widths = widths.size();
 
-//     riptide::check_stdnoise(stdnoise);
-//     riptide::check_trial_widths(widths.data(0), num_widths, size); 
+    riptide::check_stdnoise(stdnoise);
+    riptide::check_trial_widths(widths.data(0), num_widths, size); 
 
-//     auto arr_output = new_cstyle_array<float>({num_widths});
+    auto arr_output = new_cstyle_array<float>({num_widths});
 
-//     riptide::snr1(x.data(0), size, widths.data(0), num_widths, stdnoise, arr_output.mutable_data(0));
-//     return arr_output;
-// }
+    riptide::snr1(x.data(0), size, widths.data(0), num_widths, stdnoise, arr_output.mutable_data(0));
+    return arr_output;
+}
 
 
-// py::array_t<float> snr2(py::array_t<float> arr_x, py::array_t<size_t> arr_widths, float stdnoise)
-// {
-//     assert_c_contiguous(arr_x);
-//     assert_c_contiguous(arr_widths);
-//     auto x = arr_x.unchecked<2>();
-//     const size_t rows = x.shape(0);
-//     const size_t cols = x.shape(1);
+py::array_t<float> snr2(py::array_t<float> arr_x, py::array_t<size_t> arr_widths, float stdnoise)
+{
+    assert_c_contiguous(arr_x);
+    assert_c_contiguous(arr_widths);
+    auto x = arr_x.unchecked<2>();
+    const size_t rows = x.shape(0);
+    const size_t cols = x.shape(1);
 
-//     auto widths = arr_widths.unchecked<1>();
-//     const size_t num_widths = widths.size();
+    auto widths = arr_widths.unchecked<1>();
+    const size_t num_widths = widths.size();
 
-//     riptide::check_stdnoise(stdnoise);
-//     riptide::check_trial_widths(widths.data(0), num_widths, cols); 
+    riptide::check_stdnoise(stdnoise);
+    riptide::check_trial_widths(widths.data(0), num_widths, cols); 
 
-//     auto arr_output = new_cstyle_array<float>({rows, num_widths});
-//     auto block = riptide::ConstBlock(x.data(0, 0), rows, cols);
+    auto arr_output = new_cstyle_array<float>({rows, num_widths});
+    auto block = riptide::ConstBlock(x.data(0, 0), rows, cols);
 
-//     riptide::snr2(block, widths.data(0), num_widths, stdnoise, arr_output.mutable_data(0, 0));
-//     return arr_output;
-// }
+    riptide::snr2(block, widths.data(0), num_widths, stdnoise, arr_output.mutable_data(0, 0));
+    return arr_output;
+}
 
 
 py::array_t<float> downsample(py::array_t<float> arr_x, double f)
@@ -344,7 +344,9 @@ std::tuple<py::array_t<std::complex<float>>, py::array_t<double>>
 vis_ffa_transform_basep(
     py::array_t<std::complex<float>> arr_vis_data,
     size_t bins,
-    double tsamp
+    double tsamp,
+    size_t rows_eval = 0,
+    double downsample_factor = 1.0
 ) {
     assert_c_contiguous(arr_vis_data);
 
@@ -358,14 +360,21 @@ vis_ffa_transform_basep(
 
     const std::complex<float>* vis_data = static_cast<const std::complex<float>*>(buf.ptr);
 
+    const bool do_downsample = (downsample_factor > 1.0);
+    if (do_downsample) {
+        riptide::check_downsampling_factor(nsamp, downsample_factor);
+    }
+    size_t n = do_downsample ? riptide::downsampled_size(nsamp, downsample_factor) : nsamp;
+
     // Compute rows
-    size_t rows = nsamp / bins;
+    size_t rows = n / bins;
     if (rows < 2) {
         throw std::runtime_error("vis_ffa_transform_basep: too few rows.");
     }
+    size_t actual_rows_eval = (rows_eval > 0 && rows_eval < rows) ? rows_eval : rows;
 
-    // Allocate output cube: (N_uv, rows, bins)
-    py::array_t<std::complex<float>> out_array({N_uv, rows, bins});
+    // Allocate output cube: (N_uv, actual_rows_eval, bins)
+    py::array_t<std::complex<float>> out_array({N_uv, actual_rows_eval, bins});
     auto out_buf = out_array.request();
     std::complex<float>* out_ptr = static_cast<std::complex<float>*>(out_buf.ptr);
 
@@ -380,11 +389,13 @@ vis_ffa_transform_basep(
         bins,
         tsamp,
         out_ptr,
-        periods
+        periods,
+        actual_rows_eval,
+        downsample_factor
     );
 
     // Wrap periods into NumPy array
-    py::array_t<double> periods_array(ssize_t(rows), periods.data());
+    py::array_t<double> periods_array(ssize_t(actual_rows_eval), periods.data());
 
     return std::make_tuple(out_array, periods_array);
 }
@@ -393,7 +404,6 @@ vis_ffa_transform_basep(
 py::list image_ffa_candidates(
     py::array_t<std::complex<float>> uv_ffa_cube, // (N_uv, Nperiod, Nphase)
     py::array_t<size_t> uv_indices, // shape (M, 2)
-    py::array_t<float> psf_image,   // shape (ny, nx), real-valued
     py::array_t<size_t> widths,
     py::array_t<float> trial_periods,
     size_t nx,
@@ -442,18 +452,6 @@ py::list image_ffa_candidates(
         v_vec[i] = uv_un(i, 1);
     }
 
-    // Convert PSF image to vector<float>
-    if (psf_image.ndim() != 2 || (size_t)psf_image.shape(0) != ny || (size_t)psf_image.shape(1) != nx)
-        throw std::runtime_error("PSF image must have shape (ny, nx)");
-
-    auto psf_buf = psf_image.unchecked<2>();
-    std::vector<float> psf_vec(nx * ny);
-    for (size_t y = 0; y < ny; ++y) {
-        for (size_t x = 0; x < nx; ++x) {
-            psf_vec[y * nx + x] = psf_buf(y, x);
-        }
-    }
-
     // Convert widths array
     if (widths.ndim() != 1)
         throw std::runtime_error("widths must be 1D");
@@ -461,7 +459,6 @@ py::list image_ffa_candidates(
     std::memcpy(widths_vec.data(), widths.data(), widths.size() * sizeof(size_t));
 
     riptide::ImageFFATrial ffa(nx, ny);
-    ffa.set_psf(psf_vec);
 
     auto get_block = [&](size_t i) -> const riptide::ConstComplexBlock& {
         return blocks[i];
@@ -501,7 +498,6 @@ py::list image_ffa_candidates(
 py::dict image_ffa_test(
     py::array_t<std::complex<float>> uv_ffa_cube, // (N_uv, Nperiod, Nphase)
     py::array_t<size_t> uv_indices,               // (M, 2)
-    py::array_t<float> psf_image,                 // (ny, nx)
     size_t nx,
     size_t ny
 ) {
@@ -537,20 +533,7 @@ py::dict image_ffa_test(
         v_vec[i] = uv_un(i, 1);
     }
 
-    // Convert PSF image to vector<float>
-    if (psf_image.ndim() != 2 || (size_t)psf_image.shape(0) != ny || (size_t)psf_image.shape(1) != nx)
-        throw std::runtime_error("PSF image must have shape (ny, nx)");
-
-    auto psf_buf = psf_image.unchecked<2>();
-    std::vector<float> psf_vec(nx * ny);
-    for (size_t y = 0; y < ny; ++y) {
-        for (size_t x = 0; x < nx; ++x) {
-            psf_vec[y * nx + x] = psf_buf(y, x);
-        }
-    }
-
     riptide::ImageFFATrial ffa(nx, ny);
-    ffa.set_psf(psf_vec);
 
     auto get_block = [&](size_t i) -> const riptide::ConstComplexBlock& {
         return blocks[i];
@@ -580,7 +563,6 @@ py::dict image_ffa_test(
 py::dict image_ffa_test_img(
     py::array_t<std::complex<float>> uv_ffa_cube, // (N_uv, Nperiod, Nphase)
     py::array_t<size_t> uv_indices,               // (M, 2)
-    py::array_t<float> psf_image,                 // (ny, nx)
     py::array_t<float> trial_periods,             // (Nperiod,)
     size_t nx,
     size_t ny
@@ -620,16 +602,6 @@ py::dict image_ffa_test_img(
         v_vec[i] = uv_un(i, 1);
     }
 
-    // Convert PSF image
-    if (psf_image.ndim() != 2 || (size_t)psf_image.shape(0) != ny || (size_t)psf_image.shape(1) != nx)
-        throw std::runtime_error("PSF image must have shape (ny, nx)");
-
-    auto psf_buf = psf_image.unchecked<2>();
-    std::vector<float> psf_vec(nx * ny);
-    for (size_t y = 0; y < ny; ++y)
-        for (size_t x = 0; x < nx; ++x)
-            psf_vec[y * nx + x] = psf_buf(y, x);
-
     // trial periods
     auto tp_buf = trial_periods.unchecked<1>();
     std::vector<float> tp_vec(rows);
@@ -638,7 +610,6 @@ py::dict image_ffa_test_img(
 
     // Build trial object
     riptide::ImageFFATrial ffa(nx, ny);
-    ffa.set_psf(psf_vec);
 
     auto get_block = [&](size_t i) -> const riptide::ConstComplexBlock& {
         return blocks[i];
@@ -732,15 +703,15 @@ PYBIND11_MODULE(libcpp, m)
         "Benchmark the ffa2() function. Returns the time per loop in seconds."
     );
 
-    // m.def(
-    //     "snr1", &snr1, py::arg("data"), py::arg("widths"), py::arg("stdnoise") = 1.0,
-    //     "S/N of a single pulse profile for multiple boxcar filter widths"
-    // );
+    m.def(
+        "snr1", &snr1, py::arg("data"), py::arg("widths"), py::arg("stdnoise") = 1.0,
+        "S/N of a single pulse profile for multiple boxcar filter widths"
+    );
 
-    // m.def(
-    //     "snr2", &snr2, py::arg("data"), py::arg("widths"), py::arg("stdnoise") = 1.0,
-    //     "S/N of multiple pulse profiles for multiple boxcar filter widths. 'data' must be a 2D array with shape (num_profiles, num_bins)."
-    // );
+    m.def(
+        "snr2", &snr2, py::arg("data"), py::arg("widths"), py::arg("stdnoise") = 1.0,
+        "S/N of multiple pulse profiles for multiple boxcar filter widths. 'data' must be a 2D array with shape (num_profiles, num_bins)."
+    );
 
     m.def(
         "downsample", &downsample, py::arg("data"), py::arg("factor"),
@@ -752,11 +723,11 @@ PYBIND11_MODULE(libcpp, m)
         "Downsample complex data by a real-valued factor"
     );
 
-    // m.def(
-    //     "periodogram", &periodogram,
-    //     py::arg("data"), py::arg("tsamp"), py::arg("widths"), py::arg("period_min"), py::arg("period_max"), py::arg("bins_min"), py::arg("bins_max"),
-    //     "Compute the periodogram of a time series. Returns a 3-tuple of arrays: trial periods, number of phase bins, S/N"
-    // );
+    m.def(
+        "periodogram", &periodogram,
+        py::arg("data"), py::arg("tsamp"), py::arg("widths"), py::arg("period_min"), py::arg("period_max"), py::arg("bins_min"), py::arg("bins_max"),
+        "Compute the periodogram of a time series. Returns a 3-tuple of arrays: trial periods, number of phase bins, S/N"
+    );
 
     m.def(
         "vis_ffa_transform", &vis_ffa_transform,
@@ -766,7 +737,11 @@ PYBIND11_MODULE(libcpp, m)
 
     m.def(
         "vis_ffa_transform_basep", &vis_ffa_transform_basep,
-        py::arg("vis_data"), py::arg("bins"), py::arg("tsamp"),
+        py::arg("vis_data"),
+        py::arg("bins"),
+        py::arg("tsamp"),
+        py::arg("rows_eval") = 0,
+        py::arg("downsample_factor") = 1.0,
         "Compute the FFA transform of a block of visibilities (a DGA) for a single base period. Returns a FFA-transformed DGA"
     );
 
@@ -774,7 +749,6 @@ PYBIND11_MODULE(libcpp, m)
         "image_ffa_candidates", &image_ffa_candidates,
         py::arg("uv_ffa_blocks"), 
         py::arg("uv_indices"), 
-        py::arg("psf_img"), 
         py::arg("widths"),
         py::arg("periods"),
         py::arg("nx"), 
@@ -785,19 +759,10 @@ PYBIND11_MODULE(libcpp, m)
         py::arg("mask_radius") = 2
     );
 
-    //     py::dict image_ffa_test(
-    //     py::array_t<std::complex<float>> uv_ffa_cube, // (N_uv, Nperiod, Nphase)
-    //     py::array_t<size_t> uv_indices,               // (M, 2)
-    //     py::array_t<float> psf_image,                 // (ny, nx)
-    //     size_t nx,
-    //     size_t ny
-    // ) {
-
     m.def(
         "image_ffa_test", &image_ffa_test,
         py::arg("uv_ffa_blocks"), 
         py::arg("uv_indices"), 
-        py::arg("psf_img"), 
         py::arg("nx"), 
         py::arg("ny")
     );
@@ -806,7 +771,6 @@ PYBIND11_MODULE(libcpp, m)
         "image_ffa_test_img", &image_ffa_test_img,
         py::arg("uv_ffa_cube"),
         py::arg("uv_indices"),
-        py::arg("psf_image"),
         py::arg("trial_periods"),
         py::arg("nx"),
         py::arg("ny")

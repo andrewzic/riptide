@@ -14,8 +14,29 @@ SAFE_FAST_MATH_FLAGS = [
 
 include_dirs = []
 library_dirs = []
-extra_link_args = []
-libraries = ["fftw3f"]   # we only need the float API
+extra_link_args = ["-pthread"]
+extra_compile_args = ["-O3", "-std=c++17", "-pthread"] + SAFE_FAST_MATH_FLAGS
+libraries = ["ducc0"]
+
+# Path to local ducc static library build and headers
+ducc_root = os.environ.get(
+    "DUCCDIR",
+    os.path.normpath(
+        os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "..",
+            "ducc",
+        )
+    ),
+)
+if os.path.isdir(ducc_root):
+    ducc_src = os.path.join(ducc_root, "src")
+    ducc_lib = os.path.join(ducc_root, "build_cpp")
+    if os.path.isdir(ducc_src):
+        include_dirs.append(ducc_src)
+    if os.path.isdir(ducc_lib):
+        library_dirs.append(ducc_lib)
+        extra_link_args.append(f"-Wl,-rpath,{ducc_lib}")
 
 fftwd_dir = os.environ.get("FFTWDIR")
 if fftwd_dir:
@@ -29,8 +50,20 @@ if conda_prefix:
     library_dirs.append(os.path.join(conda_prefix, "lib"))
     extra_link_args.append(f"-Wl,-rpath,{os.path.join(conda_prefix, 'lib')}")
 
-common_includes = ["/usr/include", "/usr/local/include"]
-common_libs = ["/usr/lib", "/usr/local/lib", "/usr/lib64", "/usr/local/lib64"]
+common_includes = [
+    os.path.join(sys.prefix, "include"),
+    "/opt/homebrew/include",
+    "/usr/include",
+    "/usr/local/include",
+]
+common_libs = [
+    os.path.join(sys.prefix, "lib"),
+    "/opt/homebrew/lib",
+    "/usr/lib",
+    "/usr/local/lib",
+    "/usr/lib64",
+    "/usr/local/lib64",
+]
 
 for d in common_includes:
     if os.path.isdir(d):
@@ -39,6 +72,7 @@ for d in common_includes:
 for d in common_libs:
     if os.path.isdir(d):
         library_dirs.append(d)
+        extra_link_args.append(f"-Wl,-rpath,{d}")
 
 # De-duplicate
 include_dirs = list(dict.fromkeys(include_dirs))
@@ -48,7 +82,7 @@ ext_modules = [
     Pybind11Extension(
         "riptide.libcpp",
         sorted(["src/riptide/cpp/python_bindings.cpp"]),
-        extra_compile_args=["-O3", "-march=native"] + SAFE_FAST_MATH_FLAGS,
+        extra_compile_args=extra_compile_args,
         include_dirs=include_dirs,
         library_dirs=library_dirs,
         libraries=libraries,

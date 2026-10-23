@@ -1,8 +1,12 @@
- #include <vector>
+#ifndef IMAGE_SNR_HPP
+#define IMAGE_SNR_HPP
+
+#include <vector>
 #include <cmath>
 #include <algorithm>
 #include <limits>
-#include <numeric> // for std::accumulate
+#include <numeric>
+#include <complex>
 
 #include "block.hpp"
 #include "kernels.hpp"
@@ -25,12 +29,6 @@ struct ImgOneResult {
     std::vector<std::complex<float>> uvgrid;  // uv-domain grid
     std::vector<float> image;                 // real-space image
 };
-
-// struct ImgTestResult {
-//     std::vector<float> image;  // best-SNR plane (nx*ny)
-//     float snr;                 // max SNR found
-//     float period;              // trial_period for this row
-// };
 
 struct ImgTestResult {
     std::vector<float> snr_plane;      // (ny*nx)
@@ -66,54 +64,136 @@ inline std::vector<float> extract_cutout(
     return cutout;
 }
 
-  
 /*
- Compute snr for a single 1D phase profile.
- - arr: length nbins (float)
- - widths: array of widths
- - num_widths: number of widths
- - out_snr: length num_widths (written)
+ Compute the phase-averaged (continuum) dirty image across all phase bins:
+   mean_img[p] = (1 / nbins) * sum_{b=0}^{nbins-1} images[b * img_size + p]
 */
-inline void snr1(
-    const float* __restrict__ arr,
+inline void compute_phase_mean_image(
+    const float* __restrict__ images,
+    size_t img_size,
     size_t nbins,
-    const size_t* widths,
-    size_t num_widths,
-    float stdnoise,
-    float* __restrict__ out_snr,
-    float* __restrict__ cpfsum_buf)
+    std::vector<float>& mean_img)
 {
-    const size_t wmax = *std::max_element(widths, widths + num_widths);
+    mean_img.assign(img_size, 0.0f);
+    if (nbins == 0 || img_size == 0) return;
 
-    circular_prefix_sum(arr, nbins, nbins + wmax, cpfsum_buf);
-    const float sum = cpfsum_buf[nbins - 1];
+    for (size_t b = 0; b < nbins; ++b) {
+        const float* __restrict__ img_b = images + b * img_size;
+        for (size_t p = 0; p < img_size; ++p) {
+            mean_img[p] += img_b[p];
+        }
+    }
 
-    for (size_t iw = 0; iw < num_widths; ++iw) {
-        const size_t w = widths[iw];
-        const float h = std::sqrt((nbins - w) / float(nbins * w));
-        const float b = w / float(nbins - w) * h;
-
-        auto res = diff_max_index(cpfsum_buf + w, cpfsum_buf, nbins);
-        const float dmax = res.first;
-
-        const float snr = ((h + b) * dmax - b * sum) / stdnoise;
-        out_snr[iw] = snr;
+    const float inv_nbins = 1.0f / static_cast<float>(nbins);
+    for (size_t p = 0; p < img_size; ++p) {
+        mean_img[p] *= inv_nbins;
     }
 }
 
 /*
-Find candidates from a stack of PSF-convolved real-valued images.
-Inputs:
- - images: float image stack, layout [phase * (nx*ny) + y*nx + x]
- - nx, ny: image dims
- - nbins: number of phase bins (number of images)
- - widths: array of trial widths (size_t)
- - num_widths: number of widths
- - snr_thresh: threshold (e.g. 8.0f)
- - max_candidates: maximum candidates to return (e.g. 100)
- - mask_radius: radius in pixels to suppress around accepted candidate (e.g. 2)
-Returns:
- - std::vector<Candidate> sorted by descending snr (truncated to max_candidates)
+ Hybrid matched-boxcar + spatial RMS S/N plane for a given pulse width (width_bins):
+   For each starting phase bin b in [0, nbins):
+     boxcar_w(I(b))[p] = sum_{k=0}^{w-1} (I((b + k) % nbins, p) - mean_img[p])
+     sigma_xy = stddev_{x,y}(boxcar_w(I(b)))
+     SNR_w(b, p) = boxcar_w(I(b))[p] / sigma_xy
+   out_plane[p] = max_{b} SNR_w(b, p)
+
+ Note: The zero-mean unit-norm boxcar scale factor (h + b) = sqrt(nbins / (w * (nbins - w)))
+ is a positive constant across all spatial pixels (x, y) for fixed (w, b), so it cancels
+ identically between the numerator boxcar_w(I(b))[p] and denominator sigma_xy(boxcar_w(I(b))).
+*/
+inline void compute_boxcar_snr_plane(
+    const float* __restrict__ images,
+    const float* __restrict__ mean_img,
+    size_t img_size,
+    size_t nbins,
+    size_t width_bins,
+    float* __restrict__ out_plane,
+    std::vector<float>& box_img)
+{
+    const float NEG_INF = -std::numeric_limits<float>::max();
+    std::fill(out_plane, out_plane + img_size, NEG_INF);
+
+    if (width_bins == 0 || width_bins >= nbins || img_size == 0) {
+        std::fill(out_plane, out_plane + img_size, 0.0f);
+        return;
+    }
+
+    box_img.resize(img_size);
+    const float w_f = static_cast<float>(width_bins);
+    bool any_valid_phase = false;
+
+    for (size_t b = 0; b < nbins; ++b) {
+        // Compute box_img directly for phase bin b to avoid float32 drift when sliding past empty bins:
+        for (size_t p = 0; p < img_size; ++p) {
+            box_img[p] = -w_f * mean_img[p];
+        }
+        for (size_t k = 0; k < width_bins; ++k) {
+            const float* __restrict__ img_k = images + ((b + k) % nbins) * img_size;
+            for (size_t p = 0; p < img_size; ++p) {
+                box_img[p] += img_k[p];
+            }
+        }
+
+        const float sigma_xy = compute_stddev(box_img.data(), img_size);
+        if (sigma_xy > 1e-12f) {
+            any_valid_phase = true;
+            const float inv_sigma = 1.0f / sigma_xy;
+            for (size_t p = 0; p < img_size; ++p) {
+                const float s = box_img[p] * inv_sigma;
+                if (s > out_plane[p]) {
+                    out_plane[p] = s;
+                }
+            }
+        }
+    }
+
+    if (!any_valid_phase) {
+        std::fill(out_plane, out_plane + img_size, 0.0f);
+    }
+}
+
+/*
+ Generate default boxcar width trials in C++ (matching generate_width_trials in Python).
+*/
+inline std::vector<size_t> generate_default_image_widths(
+    size_t nbins,
+    double ducy_max = 0.5,
+    double wtsp = 1.5)
+{
+    std::vector<size_t> widths;
+    if (nbins <= 1) return widths;
+
+    size_t w = 1;
+    size_t wmax = std::max<size_t>(1, static_cast<size_t>(ducy_max * static_cast<double>(nbins)));
+    if (wmax >= nbins) {
+        wmax = nbins - 1;
+    }
+
+    while (w <= wmax && w < nbins) {
+        widths.push_back(w);
+        size_t next_w = static_cast<size_t>(wtsp * static_cast<double>(w));
+        w = std::max(w + 1, next_w);
+    }
+    return widths;
+}
+
+/*
+ Find candidates from a stack of real-valued folded phase images using the hybrid
+ boxcar-matched + spatial RMS estimator:
+   SNR_w(y, x) = max_{b} [ boxcar_w(I(b))(y, x) / sigma_{x,y}(boxcar_w(I(b))) ]
+ Inputs:
+  - images: float image stack, layout [phase * (nx*ny) + y*nx + x]
+  - nx, ny: image dims
+  - nbins: number of phase bins (number of images)
+  - widths: array of trial widths (size_t)
+  - num_widths: number of widths
+  - trial_period: trial period (seconds)
+  - snr_thresh: threshold (e.g. 8.0f)
+  - max_candidates: maximum candidates to return (e.g. 100)
+  - mask_radius: radius in pixels to suppress around accepted candidate (e.g. 2)
+ Returns:
+  - std::vector<Candidate> sorted by descending snr (truncated to max_candidates)
 */
 inline std::vector<Candidate> find_image_candidates(
     const float* __restrict__ images,
@@ -130,39 +210,36 @@ inline std::vector<Candidate> find_image_candidates(
     size_t cut_ny = 64)
 {
     const size_t img_size = nx * ny;
-    const size_t total_samples = img_size * nbins;
-
-    float stdnoise = compute_stddev(images, total_samples);
-    if (!(stdnoise > 0.f))
-        throw std::invalid_argument("Estimated stdnoise <= 0");
-
     std::vector<Candidate> candidates;
+    if (img_size == 0 || nbins <= 1 || num_widths == 0) {
+        return candidates;
+    }
+
     const float NEG_INF = -std::numeric_limits<float>::max();
     const ssize_t r = static_cast<ssize_t>(mask_radius);
 
-    // temporary buffers reused for each pixel
-    std::vector<float> profile(nbins);
-    std::vector<float> cpfsum(nbins + *std::max_element(widths, widths + num_widths));
-    std::vector<float> tmp_snr(num_widths);
+    // Precompute phase-mean continuum image once for this trial period
+    std::vector<float> mean_img;
+    compute_phase_mean_image(images, img_size, nbins, mean_img);
+
+    // Reusable buffers across width trials
+    std::vector<float> box_img(img_size);
+    std::vector<float> plane(img_size);
 
     // --- process one width at a time ---
     for (size_t iw = 0; iw < num_widths; ++iw) {
         const size_t width_bins = widths[iw];
-        if (width_bins >= nbins) continue; // invalid, skip
+        if (width_bins == 0 || width_bins >= nbins) continue;
 
-        // make one SNR plane for this width
-        std::vector<float> plane(img_size);
-
-        for (size_t y = 0; y < ny; ++y) {
-            for (size_t x = 0; x < nx; ++x) {
-                size_t pix_idx = y * nx + x;
-                for (size_t p = 0; p < nbins; ++p)
-                    profile[p] = images[p * img_size + pix_idx];
-                snr1(profile.data(), nbins, &width_bins, 1,
-                     stdnoise, tmp_snr.data(), cpfsum.data());
-                plane[pix_idx] = tmp_snr[0];
-            }
-        }
+        compute_boxcar_snr_plane(
+            images,
+            mean_img.data(),
+            img_size,
+            nbins,
+            width_bins,
+            plane.data(),
+            box_img
+        );
 
         // --- candidate search on this width plane ---
         while (true) {
@@ -217,5 +294,7 @@ inline std::vector<Candidate> find_image_candidates(
 
     return candidates;
 }
-  
+
 } // namespace riptide
+
+#endif // IMAGE_SNR_HPP

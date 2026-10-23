@@ -7,6 +7,7 @@
 #include <type_traits>
 #include <cmath>
 #include <algorithm>
+#include <numeric>
 #include <utility> // std::pair
 
 namespace riptide {

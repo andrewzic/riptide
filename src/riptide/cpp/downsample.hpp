@@ -3,6 +3,8 @@
 
 #include <cstddef> // size_t
 #include <cmath>
+#include <algorithm>
+#include <complex>
 #include <stdexcept>
 
 namespace riptide {
