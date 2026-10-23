@@ -1,5 +1,6 @@
 import os
 import sys
+import platform
 from setuptools import setup
 from pybind11.setup_helpers import Pybind11Extension, build_ext
 
@@ -16,6 +17,12 @@ include_dirs = []
 library_dirs = []
 extra_link_args = ["-pthread"]
 extra_compile_args = ["-O3", "-std=c++17", "-pthread"] + SAFE_FAST_MATH_FLAGS
+
+if platform.machine() in ("x86_64", "AMD64"):
+    # Target AVX2 / FMA baseline supported by both Intel Skylake and AMD Milan;
+    # explicitly disable AVX-512 to avoid SIGILL when built on Skylake login nodes.
+    extra_compile_args.extend(["-march=x86-64-v3", "-mno-avx512f"])
+
 libraries = ["ducc0"]
 
 # Path to local ducc static library build and headers
