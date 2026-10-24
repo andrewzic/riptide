@@ -24,7 +24,8 @@ if platform.machine() in ("x86_64", "AMD64"):
     # explicitly disable AVX-512 to avoid SIGILL when built on Skylake login nodes.
     extra_compile_args.extend(["-march=x86-64-v3", "-mno-avx512f"])
 
-libraries = ["ducc0"]
+libraries = []
+cpp_sources = ["src/riptide/cpp/python_bindings.cpp"]
 
 # Path to local ducc static library build and headers
 candidate_ducc_roots = [
@@ -35,59 +36,37 @@ candidate_ducc_roots = [
     os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "src", "ducc")),
 ]
 
-ducc_found = False
+# Prefer compiling DUCC C++ sources directly into libcpp.
+# This eliminates symbol visibility issues, LTO bytecode conflicts, and external library linking errors.
+ducc_sources = []
 for cand in candidate_ducc_roots:
     if cand and os.path.isdir(cand):
         ducc_src = os.path.join(cand, "src")
-        for lib_sub in ["build_cpp", "build", "build_cpp/src", "build/src", ""]:
-            cand_lib = os.path.join(cand, lib_sub) if lib_sub else cand
-            target_a = os.path.join(cand_lib, "libducc0.a")
-            target_so = os.path.join(cand_lib, "libducc0.so")
-
-            # Remove any symlink libducc0.so -> ducc0.cpython...so because python module shared
-            # objects hide C++ internal symbols (-fvisibility=hidden). Static archive is required.
-            if os.path.islink(target_so):
-                try:
-                    os.unlink(target_so)
-                except Exception:
-                    pass
-
-            # If libducc0.a does not exist, automatically archive it from compiled object files
-            if not os.path.isfile(target_a):
-                cmake_dir = os.path.join(cand_lib, "CMakeFiles", "ducc0.dir")
-                if os.path.isdir(cmake_dir):
-                    import subprocess
-                    obj_files = []
-                    for root, _, files in os.walk(cmake_dir):
-                        for f in files:
-                            if f.endswith(".o"):
-                                obj_files.append(os.path.join(root, f))
-                    if obj_files:
-                        print(f"[setup.py] Creating static archive {target_a} from {len(obj_files)} object files...")
-                        subprocess.check_call(["ar", "rcs", target_a] + obj_files)
-
-            if os.path.isfile(target_a) or os.path.isfile(target_so):
-                include_dirs.append(ducc_src if os.path.isdir(ducc_src) else cand)
-                library_dirs.append(cand_lib)
-                extra_link_args.append(f"-Wl,-rpath,{cand_lib}")
-                ducc_found = True
-                print(f"[setup.py] Found ducc headers at {ducc_src}, library at {cand_lib}")
+        ducc0_dir = os.path.join(ducc_src, "ducc0")
+        if os.path.isdir(ducc0_dir):
+            include_dirs.append(ducc_src)
+            for root, _, files in os.walk(ducc0_dir):
+                for f in files:
+                    if f.endswith(".cc"):
+                        ducc_sources.append(os.path.join(root, f))
+            if ducc_sources:
+                print(f"[setup.py] Compiling {len(ducc_sources)} DUCC C++ source files directly into libcpp from {ducc_src}")
+                cpp_sources.extend(sorted(ducc_sources))
                 break
-        if not ducc_found and os.path.isdir(cand):
-            # Fallback if library hasn't been built yet or has custom name
+
+if not ducc_sources:
+    # Fallback to external library if sources cannot be found
+    libraries.append("ducc0")
+    for cand in candidate_ducc_roots:
+        if cand and os.path.isdir(cand):
+            ducc_src = os.path.join(cand, "src")
             ducc_lib = os.path.join(cand, "build_cpp")
             if os.path.isdir(ducc_src):
                 include_dirs.append(ducc_src)
             if os.path.isdir(ducc_lib):
                 library_dirs.append(ducc_lib)
                 extra_link_args.append(f"-Wl,-rpath,{ducc_lib}")
-                ducc_found = True
-                print(f"[setup.py] Using fallback ducc at {cand}, lib at {ducc_lib}")
-        if ducc_found:
             break
-
-if not ducc_found:
-    print("[setup.py] WARNING: Could not find DUCC directory or libducc0 archive!")
 
 fftwd_dir = os.environ.get("FFTWDIR")
 if fftwd_dir:
@@ -132,7 +111,7 @@ library_dirs = list(dict.fromkeys(library_dirs))
 ext_modules = [
     Pybind11Extension(
         "riptide.libcpp",
-        sorted(["src/riptide/cpp/python_bindings.cpp"]),
+        sorted(cpp_sources),
         extra_compile_args=extra_compile_args,
         include_dirs=include_dirs,
         library_dirs=library_dirs,
