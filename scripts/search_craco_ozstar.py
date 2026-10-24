@@ -1,0 +1,456 @@
+#!/usr/bin/env python3
+"""
+search_craco_ozstar.py
+
+Execute Visibility FFA search (P = 1.0s to 5.0s) on dedispersed CRACO UV cubes on OzSTAR.
+Supports single-file evaluation or automated batch search across all DM trials up to DM=500.
+Evaluates forced candidate extraction at pixel (274, 10) and full 3D blind peak search.
+"""
+
+import os
+import sys
+import gc
+import re
+import glob
+import time
+import argparse
+import numpy as np
+import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
+from astropy.io import fits
+from astropy.wcs import WCS
+import astropy.units as u
+
+import riptide
+from riptide.ffautils import plan_ffa
+import riptide.libcpp as _libcpp
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Visibility FFA 1.0 - 5.0s period search on OzSTAR")
+    parser.add_argument(
+        "--data-dir",
+        default="/fred/oz451/azic/data/SB77974",
+        help="Directory containing CRACO UV cubes (default: /fred/oz451/azic/data/SB77974)",
+    )
+    parser.add_argument(
+        "--real-cube",
+        default=None,
+        help="Path to specific real UV cube FITS file (overrides --data-dir)",
+    )
+    parser.add_argument(
+        "--imag-cube",
+        default=None,
+        help="Path to specific imag UV cube FITS file",
+    )
+    parser.add_argument("--dm-min", type=float, default=0.0, help="Minimum DM to process (default: 0.0)")
+    parser.add_argument("--dm-max", type=float, default=500.0, help="Maximum DM to process (default: 500.0)")
+    parser.add_argument("--pmin", type=float, default=1.0, help="Minimum period to search in seconds (default: 1.0)")
+    parser.add_argument("--pmax", type=float, default=5.0, help="Maximum period to search in seconds (default: 5.0)")
+    parser.add_argument("--bins-min", type=int, default=10, help="Minimum phase bins (default: 10)")
+    parser.add_argument("--bins-max", type=int, default=64, help="Maximum phase bins (default: 64)")
+    parser.add_argument("--cand-x", type=int, default=274, help="Candidate X pixel coordinate (default: 274)")
+    parser.add_argument("--cand-y", type=int, default=10, help="Candidate Y pixel coordinate (default: 10)")
+    parser.add_argument("--out-prefix", default="craco_ffa_search", help="Prefix for outputs")
+    parser.add_argument("--save-cube", action="store_true", default=False, help="Save 3D SNR cube to FITS")
+    parser.add_argument("--skip-existing", action="store_true", default=False, help="Skip DM trials with existing plots")
+    parser.add_argument(
+        "--array-index",
+        type=int,
+        default=None,
+        help="Index of DM trial to process (or uses SLURM_ARRAY_TASK_ID if set)",
+    )
+    return parser.parse_args()
+
+
+def find_dm_pairs(data_dir, dm_min=0.0, dm_max=500.0):
+    """
+    Search data_dir for CRACO UV cube pairs matching real/imag and dm within [dm_min, dm_max].
+    Returns list of dicts: {'dm': float, 'real': path, 'imag': path} sorted ascending by dm.
+    """
+    patterns = [
+        os.path.join(data_dir, "*dirty_cube-uv-real.cube.fits"),
+        os.path.join(data_dir, "*", "*dirty_cube-uv-real.cube.fits"),
+        os.path.join(data_dir, "*real.cube.fits"),
+    ]
+    real_files = []
+    for pat in patterns:
+        found = glob.glob(pat)
+        if found:
+            real_files.extend(found)
+
+    real_files = sorted(list(set(real_files)))
+    pairs = []
+    for rf in real_files:
+        m = re.search(r"dm([0-9.]+)", os.path.basename(rf))
+        if not m:
+            continue
+        try:
+            dm = float(m.group(1))
+        except ValueError:
+            continue
+
+        if not (dm_min <= dm <= dm_max):
+            continue
+
+        # Look for matching imaginary cube
+        imag_f = rf.replace("-real.cube.fits", "-imag.cube.fits")
+        if not os.path.isfile(imag_f):
+            imag_f = rf.replace("uv-real", "uv-imag")
+        if not os.path.isfile(imag_f):
+            imag_f = rf.replace("real", "imag")
+
+        if os.path.isfile(imag_f):
+            pairs.append({"dm": dm, "real": rf, "imag": imag_f})
+
+    # Sort strictly by DM
+    pairs.sort(key=lambda x: x["dm"])
+    return pairs
+
+
+def search_single_dm(real_file, imag_file, dm, args, plans=None, total_trials=None):
+    """
+    Execute Visibility FFA search on a single DM real/imag cube pair.
+    Returns a result dictionary.
+    """
+    t0_dm = time.time()
+    plot_file = f"{args.out_prefix}_dm{dm:06.1f}_detection_summary.png"
+
+    if args.skip_existing and os.path.isfile(plot_file):
+        print(f"Skipping DM={dm:.1f} (Plot {plot_file} already exists).")
+        return None
+
+    print(f"\n=================================================================")
+    print(f"  Processing DM = {dm:6.1f} pc cm^-3")
+    print(f"  Real: {os.path.basename(real_file)}")
+    print(f"  Imag: {os.path.basename(imag_file)}")
+    print(f"=================================================================")
+
+    # 1. Load FITS files
+    with fits.open(real_file, memmap=True) as hr, fits.open(imag_file, memmap=True) as hi:
+        hdr = hr[0].header
+        r = np.nan_to_num(hr[0].data.squeeze(), nan=0.0, posinf=0.0, neginf=0.0)
+        i = np.nan_to_num(hi[0].data.squeeze(), nan=0.0, posinf=0.0, neginf=0.0)
+
+    vis = (r + 1j * i).astype(np.complex64)
+    nsamp, ny, nx = vis.shape
+    del r, i
+
+    # Read tsamp
+    tsamp = float(hdr.get("CDELT3", hdr.get("CDELT5", 0.11056)))
+    dm_val = float(hdr.get("DM", dm))
+
+    # 2. Extract active UV tracks
+    uv_amp = np.abs(vis).mean(axis=0)
+    active = uv_amp > 0
+    u_idx, v_idx = np.nonzero(active)
+    uv_indices = np.column_stack([u_idx, v_idx]).astype(np.uint64)
+    M = len(u_idx)
+    print(f"  Active UV cells: {M} / {nx*ny} ({100.0*M/(nx*ny):.1f}% coverage) | nsamp={nsamp}")
+
+    if M == 0:
+        print(f"  [WARNING] Cube for DM={dm:.1f} contains 0 active UV cells. Skipping.")
+        del vis
+        gc.collect()
+        return None
+
+    dga = np.ascontiguousarray(vis[:, u_idx, v_idx].T, dtype=np.complex64)
+    del vis
+    gc.collect()
+
+    # 3. Plan FFA if not provided
+    if plans is None or total_trials is None:
+        plans = plan_ffa(nsamp, tsamp, args.pmin, args.pmax, args.bins_min, args.bins_max)
+        total_trials = sum(p["rows_eval"] for p in plans)
+
+    all_periods = []
+    all_snr_imgs = []
+    all_best_snrs = []
+
+    t0_ffa = time.time()
+    for idx, p in enumerate(plans, 1):
+        bins = p["bins"]
+        tau = p["tau"]
+        rows_eval = p["rows_eval"]
+        ds = p["downsample_factor"]
+
+        ffa_data, periods = _libcpp.vis_ffa_transform_basep(dga, bins, tau, rows_eval, ds)
+        tp_f32 = periods.astype(np.float32)
+
+        res = _libcpp.image_ffa_test_img(ffa_data, uv_indices, tp_f32, nx, ny)
+
+        for r_idx in range(rows_eval):
+            all_periods.append(float(tp_f32[r_idx]))
+            all_snr_imgs.append(res["images"][r_idx])
+            all_best_snrs.append(float(res["snrs"][r_idx]))
+
+    del dga
+    gc.collect()
+
+    periods_arr = np.array(all_periods, dtype=np.float32)
+    snr_stack = np.array(all_snr_imgs, dtype=np.float32)
+    del all_snr_imgs
+    gc.collect()
+
+    # Sort strictly by period
+    sort_idx = np.argsort(periods_arr)
+    periods_arr = periods_arr[sort_idx]
+    snr_stack = snr_stack[sort_idx]
+
+    # 4. Candidate Forced Measurement & Global Blind Search
+    cx, cy = args.cand_x, args.cand_y
+    forced_pgram = snr_stack[:, cy, cx]
+    forced_best_idx = int(np.argmax(forced_pgram))
+    forced_best_p = float(periods_arr[forced_best_idx])
+    forced_best_snr = float(forced_pgram[forced_best_idx])
+
+    # Blind search
+    frame_maxes = np.array([img.max() for img in snr_stack])
+    blind_best_idx = int(np.argmax(frame_maxes))
+    blind_best_p = float(periods_arr[blind_best_idx])
+    blind_best_frame = snr_stack[blind_best_idx]
+    blind_best_snr = float(blind_best_frame.max())
+    blind_y, blind_x = np.unravel_index(np.argmax(blind_best_frame), (ny, nx))
+    blind_x, blind_y = int(blind_x), int(blind_y)
+
+    # WCS Coordinates
+    try:
+        w = WCS(hdr).celestial
+    except Exception:
+        w = WCS(naxis=2)
+        w.wcs.crpix = [193.0, 193.0]
+        w.wcs.cdelt = [-22.0 / 3600.0, 22.0 / 3600.0]
+        w.wcs.crval = [264.238783892833, -23.582287754619]
+        w.wcs.ctype = ["RA---SIN", "DEC--SIN"]
+
+    coord_cand = w.pixel_to_world(cx, cy)
+    coord_blind = w.pixel_to_world(blind_x, blind_y)
+
+    elapsed_ffa = time.time() - t0_ffa
+    rate = len(periods_arr) / elapsed_ffa if elapsed_ffa > 0 else 0
+    print(f"  FFA Execution: {len(periods_arr)} periods in {elapsed_ffa:.1f}s ({rate:.1f} trials/s)")
+    print(f"  Target ({cx}, {cy}): S/N = {forced_best_snr:5.2f} at P = {forced_best_p:7.5f} s")
+    print(f"  Global Peak ({blind_x}, {blind_y}): S/N = {blind_best_snr:5.2f} at P = {blind_best_p:7.5f} s")
+
+    # 5. Diagnostic Plot
+    fig = plt.figure(figsize=(14, 10), dpi=150)
+    gs = fig.add_gridspec(2, 2, height_ratios=[1.2, 0.9], hspace=0.28, wspace=0.22)
+
+    detection_frame = snr_stack[forced_best_idx]
+
+    # Top Left: Full frame
+    ax_full = fig.add_subplot(gs[0, 0])
+    im_full = ax_full.imshow(detection_frame, origin="lower", cmap="viridis", vmin=0, vmax=max(7.5, forced_best_snr * 1.05))
+    ax_full.plot(192, 192, "w+", markersize=14, markeredgewidth=2, label="Phase Center (192, 192)")
+    box_r = 20
+    x0, x1 = max(0, cx - box_r), min(nx, cx + box_r)
+    y0, y1 = max(0, cy - box_r), min(ny, cy + box_r)
+    rect = Rectangle((x0, y0), x1 - x0, y1 - y0, fill=False, edgecolor="red", linewidth=1.8, linestyle="--")
+    ax_full.add_patch(rect)
+    ax_full.plot(cx, cy, "ro", markersize=10, fillstyle="none", markeredgewidth=2, label=f"Target ({cx}, {cy})")
+    ax_full.set_title(f"Full S/N Frame: P = {forced_best_p:.5f} s (DM = {dm_val:.1f})\n(Candidate S/N = {forced_best_snr:.2f})", fontsize=12, fontweight="bold")
+    ax_full.set_xlabel("RA Pixel (x)", fontsize=11)
+    ax_full.set_ylabel("Dec Pixel (y)", fontsize=11)
+    ax_full.legend(loc="upper right", fontsize=9.5)
+    cb_full = plt.colorbar(im_full, ax=ax_full, fraction=0.046, pad=0.04)
+    cb_full.set_label("Hybrid Boxcar S/N", fontsize=10)
+
+    # Top Right: Zoomed Cutout
+    ax_zoom = fig.add_subplot(gs[0, 1])
+    cutout = detection_frame[y0:y1, x0:x1]
+    im_zoom = ax_zoom.imshow(cutout, origin="lower", extent=[x0, x1, y0, y1], cmap="viridis", vmin=0, vmax=max(7.5, forced_best_snr * 1.05))
+    ax_zoom.plot(cx, cy, "ro", markersize=14, markeredgewidth=2.5, fillstyle="none", label=f"Target ({cx}, {cy})\nS/N = {forced_best_snr:.2f}")
+    ax_zoom.set_title(f"Zoomed Cutout around ({cx}, {cy})\nRA: {coord_cand.ra.to_string(unit=u.hour, sep=':', precision=1)}, Dec: {coord_cand.dec.to_string(unit=u.deg, sep=':', precision=1, alwayssign=True)}", fontsize=12, fontweight="bold")
+    ax_zoom.set_xlabel("RA Pixel (x)", fontsize=11)
+    ax_zoom.set_ylabel("Dec Pixel (y)", fontsize=11)
+    ax_zoom.legend(loc="upper right", fontsize=10)
+    cb_zoom = plt.colorbar(im_zoom, ax=ax_zoom, fraction=0.046, pad=0.04)
+    cb_zoom.set_label("Hybrid Boxcar S/N", fontsize=10)
+
+    # Bottom: Periodogram
+    ax_pgram = fig.add_subplot(gs[1, :])
+    pgram_center = snr_stack[:, 192, 192]
+    ax_pgram.plot(periods_arr, forced_pgram, color="#1f77b4", linewidth=1.2, label=f"Candidate Pixel ({cx}, {cy})")
+    ax_pgram.plot(periods_arr, pgram_center, color="gray", linestyle=":", alpha=0.6, label="Phase Center (192, 192) Baseline")
+    ax_pgram.axvline(forced_best_p, color="crimson", linestyle="--", linewidth=1.8, label=f"Best Peak: P = {forced_best_p:.5f} s (S/N = {forced_best_snr:.2f})")
+    ax_pgram.set_title(f"Visibility FFA Periodogram at Candidate Pixel ({cx}, {cy}) (DM = {dm_val:.1f})", fontsize=12, fontweight="bold")
+    ax_pgram.set_xlabel("Trial Period (seconds)", fontsize=11, fontweight="bold")
+    ax_pgram.set_ylabel("Hybrid Boxcar S/N", fontsize=11, fontweight="bold")
+    ax_pgram.set_xlim(periods_arr.min(), periods_arr.max())
+    ax_pgram.set_ylim(0.5, max(8.5, forced_best_snr * 1.15))
+    ax_pgram.grid(True, linestyle=":", alpha=0.6)
+    ax_pgram.legend(loc="upper right", fontsize=10)
+
+    plt.savefig(plot_file, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved plot: {plot_file}")
+
+    if args.save_cube:
+        cube_file = f"{args.out_prefix}_dm{dm:06.1f}_snr_cube.fits"
+        print(f"  Saving 3D SNR cube to {cube_file}...")
+        w_cube = WCS(naxis=2)
+        w_cube.wcs.crpix = [193.0, 193.0]
+        w_cube.wcs.cdelt = [-22.0 / 3600.0, 22.0 / 3600.0]
+        w_cube.wcs.crval = [264.238783892833, -23.582287754619]
+        w_cube.wcs.ctype = ["RA---SIN", "DEC--SIN"]
+        h_cube = w_cube.to_header()
+        h_cube["NAXIS"] = 3
+        h_cube["NAXIS1"] = nx
+        h_cube["NAXIS2"] = ny
+        h_cube["NAXIS3"] = len(periods_arr)
+        h_cube["DM"] = dm_val
+        primary_hdu = fits.PrimaryHDU(data=snr_stack, header=h_cube)
+        col_p = fits.Column(name="PERIODS", format="1E", array=periods_arr)
+        table_hdu = fits.BinTableHDU.from_columns([col_p], name="PERIODS")
+        fits.HDUList([primary_hdu, table_hdu]).writeto(cube_file, overwrite=True)
+
+    del snr_stack, forced_pgram, detection_frame
+    gc.collect()
+
+    return {
+        "dm": dm_val,
+        "cand_snr": forced_best_snr,
+        "cand_period": forced_best_p,
+        "blind_snr": blind_best_snr,
+        "blind_period": blind_best_p,
+        "blind_x": blind_x,
+        "blind_y": blind_y,
+        "cand_ra": coord_cand.ra.to_string(unit=u.hour, sep=':', precision=2),
+        "cand_dec": coord_cand.dec.to_string(unit=u.deg, sep=':', precision=2, alwayssign=True),
+        "blind_ra": coord_blind.ra.to_string(unit=u.hour, sep=':', precision=2),
+        "blind_dec": coord_blind.dec.to_string(unit=u.deg, sep=':', precision=2, alwayssign=True),
+        "duration_sec": time.time() - t0_dm,
+    }
+
+
+def plot_dm_curve(results, out_prefix, cand_x, cand_y):
+    """
+    Generate master S/N vs DM curve across all evaluated DM trials.
+    """
+    if len(results) < 2:
+        return
+
+    df = pd.DataFrame(results).sort_values("dm")
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True, dpi=150)
+
+    # 1. Candidate S/N vs DM
+    ax1.plot(df["dm"], df["cand_snr"], "o-", color="#1f77b4", linewidth=2, markersize=6, label=f"Candidate Pixel ({cand_x}, {cand_y})")
+    best_cand_row = df.loc[df["cand_snr"].idxmax()]
+    ax1.axvline(best_cand_row["dm"], color="crimson", linestyle="--", alpha=0.8,
+                label=f"Peak DM = {best_cand_row['dm']:.1f} pc cm^-3 (S/N = {best_cand_row['cand_snr']:.2f}, P = {best_cand_row['cand_period']:.5f}s)")
+    ax1.set_ylabel("Hybrid Boxcar S/N", fontsize=11, fontweight="bold")
+    ax1.set_title(f"Visibility FFA: S/N vs Dispersion Measure (Target Candidate Pixel {cand_x}, {cand_y})", fontsize=12, fontweight="bold")
+    ax1.grid(True, linestyle=":", alpha=0.6)
+    ax1.legend(loc="upper right", fontsize=10)
+
+    # 2. Global Blind Peak S/N vs DM
+    ax2.plot(df["dm"], df["blind_snr"], "s-", color="#ff7f0e", linewidth=1.8, markersize=5, label="Global Blind Peak across Full 3D Volume")
+    best_blind_row = df.loc[df["blind_snr"].idxmax()]
+    ax2.axvline(best_blind_row["dm"], color="red", linestyle=":", alpha=0.7,
+                label=f"Global Max DM = {best_blind_row['dm']:.1f} pc cm^-3 (S/N = {best_blind_row['blind_snr']:.2f} at pixel {best_blind_row['blind_x']},{best_blind_row['blind_y']})")
+    ax2.set_xlabel("Dispersion Measure (pc cm^-3)", fontsize=11, fontweight="bold")
+    ax2.set_ylabel("Global Peak S/N", fontsize=11, fontweight="bold")
+    ax2.grid(True, linestyle=":", alpha=0.6)
+    ax2.legend(loc="upper right", fontsize=10)
+
+    curve_file = f"{out_prefix}_snr_vs_dm_curve.png"
+    plt.savefig(curve_file, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"\nSaved multi-DM curve to: {curve_file}")
+
+
+def main():
+    args = parse_args()
+    t_start = time.time()
+
+    print("=================================================================")
+    print("      CRACO Visibility FFA Search (1.0s - 5.0s) on OzSTAR        ")
+    print("=================================================================")
+    print(f"Period Range: [{args.pmin:.2f}s, {args.pmax:.2f}s]")
+    print(f"Target Candidate Pixel: ({args.cand_x}, {args.cand_y})")
+
+    # Determine files to process
+    if args.real_cube:
+        if not args.imag_cube:
+            imag_f = args.real_cube.replace("-real.cube.fits", "-imag.cube.fits")
+            if not os.path.isfile(imag_f):
+                imag_f = args.real_cube.replace("uv-real", "uv-imag")
+            args.imag_cube = imag_f
+
+        m = re.search(r"dm([0-9.]+)", os.path.basename(args.real_cube))
+        dm_val = float(m.group(1)) if m else 0.0
+        tasks = [{"dm": dm_val, "real": args.real_cube, "imag": args.imag_cube}]
+    else:
+        print(f"Scanning directory for DM trials [DM <= {args.dm_max}]: {args.data_dir}")
+        tasks = find_dm_pairs(args.data_dir, dm_min=args.dm_min, dm_max=args.dm_max)
+
+    if not tasks:
+        print(f"[ERROR] No matching CRACO UV cube pairs found in {args.data_dir} with DM in [{args.dm_min}, {args.dm_max}].")
+        sys.exit(1)
+
+    # Check for Slurm job array indexing
+    array_idx = args.array_index
+    if array_idx is None and "SLURM_ARRAY_TASK_ID" in os.environ:
+        try:
+            array_idx = int(os.environ["SLURM_ARRAY_TASK_ID"])
+        except ValueError:
+            pass
+
+    if array_idx is not None:
+        if 0 <= array_idx < len(tasks):
+            print(f"Slurm Job Array Mode: Processing task {array_idx}/{len(tasks) - 1} (DM = {tasks[array_idx]['dm']:.1f})")
+            tasks = [tasks[array_idx]]
+        else:
+            print(f"[ERROR] Array index {array_idx} out of range (0 to {len(tasks)-1})")
+            sys.exit(1)
+
+    print(f"\nFound {len(tasks)} DM trial(s) to search:")
+    for i, t in enumerate(tasks, 1):
+        print(f"  [{i:2d}/{len(tasks):2d}] DM = {t['dm']:6.1f} pc cm^-3 | {os.path.basename(t['real'])}")
+
+    # Pre-plan FFA using the first cube's dimensions
+    with fits.open(tasks[0]["real"], memmap=True) as h0:
+        nsamp = h0[0].header.get("NAXIS3", 5498)
+        tsamp = float(h0[0].header.get("CDELT3", h0[0].header.get("CDELT5", 0.11056)))
+
+    plans = plan_ffa(nsamp, tsamp, args.pmin, args.pmax, args.bins_min, args.bins_max)
+    total_trials = sum(p["rows_eval"] for p in plans)
+    print(f"\nPre-computed FFA Grid: {len(plans)} Base Plans | {total_trials} Period Trials")
+
+    all_results = []
+    for idx, task in enumerate(tasks, 1):
+        print(f"\n>>> Progress: Running trial {idx}/{len(tasks)} (DM = {task['dm']:.1f} pc cm^-3) <<<")
+        res = search_single_dm(task["real"], task["imag"], task["dm"], args, plans, total_trials)
+        if res:
+            all_results.append(res)
+
+    t_total = time.time() - t_start
+    print(f"\n=================================================================")
+    print(f"                MULTI-DM SEARCH SUMMARY TABLE                    ")
+    print(f"=================================================================")
+
+    if all_results:
+        df_summary = pd.DataFrame(all_results).sort_values("dm")
+        csv_file = f"{args.out_prefix}_all_dms_summary.csv"
+        df_summary.to_csv(csv_file, index=False)
+        print(f"Saved summary CSV to: {csv_file}\n")
+
+        print(df_summary[["dm", "cand_snr", "cand_period", "blind_snr", "blind_period", "blind_x", "blind_y"]].to_string(index=False))
+
+        # Multi-DM diagnostic curve
+        plot_dm_curve(all_results, args.out_prefix, args.cand_x, args.cand_y)
+
+        best_cand = df_summary.loc[df_summary["cand_snr"].idxmax()]
+        print(f"\nTOP CANDIDATE DETECTION AT ({args.cand_x}, {args.cand_y}):")
+        print(f"  Best DM    : {best_cand['dm']:.1f} pc cm^-3")
+        print(f"  Best Period: {best_cand['cand_period']:.5f} s")
+        print(f"  Peak S/N   : {best_cand['cand_snr']:.2f}")
+
+    print(f"\nTotal Search Run Time: {t_total:.1f}s ({t_total/60:.2f} min).")
+
+
+if __name__ == "__main__":
+    main()
