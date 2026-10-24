@@ -3,14 +3,19 @@
 search_craco_ozstar.py
 
 Execute Visibility FFA search (P = 1.0s to 5.0s) on dedispersed CRACO UV cubes on OzSTAR.
-Supports single-file evaluation or automated batch search across all DM trials up to DM=500.
-Evaluates forced candidate extraction at pixel (274, 10) and full 3D blind peak search.
+Supports:
+  1. Single DM cube search (--real-cube / --imag-cube)
+  2. Batch search across all DM trials up to DM=500 (--data-dir, --dm-max 500)
+  3. Slurm Job Array execution via --array-id ${SLURM_ARRAY_TASK_ID}
+  4. Inspection and dry-run listing (--list-only)
+  5. Post-run collation of parallel array results (--collate)
 """
 
 import os
 import sys
 import gc
 import re
+import json
 import glob
 import time
 import argparse
@@ -58,10 +63,25 @@ def parse_args():
     parser.add_argument("--save-cube", action="store_true", default=False, help="Save 3D SNR cube to FITS")
     parser.add_argument("--skip-existing", action="store_true", default=False, help="Skip DM trials with existing plots")
     parser.add_argument(
+        "--array-id",
         "--array-index",
+        dest="array_id",
         type=int,
         default=None,
-        help="Index of DM trial to process (or uses SLURM_ARRAY_TASK_ID if set)",
+        help="Index of DM trial to process (or automatically reads $SLURM_ARRAY_TASK_ID)",
+    )
+    parser.add_argument(
+        "--list-only",
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="Scan and print matching DM trials and Slurm array configuration without running",
+    )
+    parser.add_argument(
+        "--collate",
+        action="store_true",
+        default=False,
+        help="Collate results from all completed array tasks into master CSV and S/N vs DM curve",
     )
     return parser.parse_args()
 
@@ -114,14 +134,19 @@ def find_dm_pairs(data_dir, dm_min=0.0, dm_max=500.0):
 def search_single_dm(real_file, imag_file, dm, args, plans=None, total_trials=None):
     """
     Execute Visibility FFA search on a single DM real/imag cube pair.
-    Returns a result dictionary.
+    Saves detection summary plot and json result, returns result dictionary.
     """
     t0_dm = time.time()
     plot_file = f"{args.out_prefix}_dm{dm:06.1f}_detection_summary.png"
+    json_file = f"{args.out_prefix}_dm{dm:06.1f}_result.json"
 
-    if args.skip_existing and os.path.isfile(plot_file):
-        print(f"Skipping DM={dm:.1f} (Plot {plot_file} already exists).")
-        return None
+    if args.skip_existing and os.path.isfile(plot_file) and os.path.isfile(json_file):
+        print(f"Skipping DM={dm:.1f} (Outputs already exist).")
+        try:
+            with open(json_file, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
 
     print(f"\n=================================================================")
     print(f"  Processing DM = {dm:6.1f} pc cm^-3")
@@ -310,7 +335,7 @@ def search_single_dm(real_file, imag_file, dm, args, plans=None, total_trials=No
     del snr_stack, forced_pgram, detection_frame
     gc.collect()
 
-    return {
+    result_dict = {
         "dm": dm_val,
         "cand_snr": forced_best_snr,
         "cand_period": forced_best_p,
@@ -324,6 +349,55 @@ def search_single_dm(real_file, imag_file, dm, args, plans=None, total_trials=No
         "blind_dec": coord_blind.dec.to_string(unit=u.deg, sep=':', precision=2, alwayssign=True),
         "duration_sec": time.time() - t0_dm,
     }
+
+    # Save individual JSON summary for parallel array collation
+    try:
+        with open(json_file, "w") as jf:
+            json.dump(result_dict, jf, indent=2)
+        print(f"  Saved JSON result: {json_file}")
+    except Exception as e:
+        print(f"  Warning saving JSON: {e}")
+
+    return result_dict
+
+
+def collate_results(out_prefix, cand_x, cand_y):
+    """
+    Search for all per-DM JSON results and produce master CSV and S/N vs DM curve.
+    """
+    json_files = sorted(glob.glob(f"{out_prefix}_dm*_result.json"))
+    if not json_files:
+        print(f"[COLLATE ERROR] No results found matching '{out_prefix}_dm*_result.json'")
+        return
+
+    print(f"\nCollating {len(json_files)} DM result files matching '{out_prefix}_dm*_result.json'...")
+    all_results = []
+    for jf in json_files:
+        try:
+            with open(jf, "r") as f:
+                all_results.append(json.load(f))
+        except Exception as e:
+            print(f"  Warning reading {jf}: {e}")
+
+    if not all_results:
+        return
+
+    df_summary = pd.DataFrame(all_results).sort_values("dm")
+    csv_file = f"{out_prefix}_all_dms_summary.csv"
+    df_summary.to_csv(csv_file, index=False)
+    print(f"\n=================================================================")
+    print(f"                MULTI-DM SEARCH SUMMARY TABLE                    ")
+    print(f"=================================================================")
+    print(df_summary[["dm", "cand_snr", "cand_period", "blind_snr", "blind_period", "blind_x", "blind_y"]].to_string(index=False))
+    print(f"\nSaved master CSV to: {csv_file}")
+
+    plot_dm_curve(all_results, out_prefix, cand_x, cand_y)
+
+    best_cand = df_summary.loc[df_summary["cand_snr"].idxmax()]
+    print(f"\nTOP CANDIDATE DETECTION AT ({cand_x}, {cand_y}):")
+    print(f"  Best DM    : {best_cand['dm']:.1f} pc cm^-3")
+    print(f"  Best Period: {best_cand['cand_period']:.5f} s")
+    print(f"  Peak S/N   : {best_cand['cand_snr']:.2f}")
 
 
 def plot_dm_curve(results, out_prefix, cand_x, cand_y):
@@ -366,6 +440,11 @@ def main():
     args = parse_args()
     t_start = time.time()
 
+    # If --collate is requested, gather finished array jobs and exit
+    if args.collate:
+        collate_results(args.out_prefix, args.cand_x, args.cand_y)
+        return
+
     print("=================================================================")
     print("      CRACO Visibility FFA Search (1.0s - 5.0s) on OzSTAR        ")
     print("=================================================================")
@@ -384,32 +463,50 @@ def main():
         dm_val = float(m.group(1)) if m else 0.0
         tasks = [{"dm": dm_val, "real": args.real_cube, "imag": args.imag_cube}]
     else:
-        print(f"Scanning directory for DM trials [DM <= {args.dm_max}]: {args.data_dir}")
         tasks = find_dm_pairs(args.data_dir, dm_min=args.dm_min, dm_max=args.dm_max)
 
     if not tasks:
         print(f"[ERROR] No matching CRACO UV cube pairs found in {args.data_dir} with DM in [{args.dm_min}, {args.dm_max}].")
         sys.exit(1)
 
-    # Check for Slurm job array indexing
-    array_idx = args.array_index
+    # Dry-run / listing mode
+    if args.list_only:
+        print(f"\nDiscovered {len(tasks)} DM trial(s) in {args.data_dir} [DM <= {args.dm_max}]:")
+        for i, t in enumerate(tasks):
+            print(f"  Task ID {i:3d} : DM = {t['dm']:6.1f} pc cm^-3 | {os.path.basename(t['real'])}")
+        print("\n=================================================================")
+        print(f"Recommended Slurm Array Directive: #SBATCH --array=0-{len(tasks)-1}%10")
+        print("=================================================================")
+        return
+
+    # Check for Slurm job array indexing:
+    # 1. Explicit CLI argument --array-id (preferred)
+    # 2. Or environment variable SLURM_ARRAY_TASK_ID
+    array_idx = args.array_id
     if array_idx is None and "SLURM_ARRAY_TASK_ID" in os.environ:
         try:
             array_idx = int(os.environ["SLURM_ARRAY_TASK_ID"])
         except ValueError:
             pass
 
-    if array_idx is not None:
-        if 0 <= array_idx < len(tasks):
-            print(f"Slurm Job Array Mode: Processing task {array_idx}/{len(tasks) - 1} (DM = {tasks[array_idx]['dm']:.1f})")
-            tasks = [tasks[array_idx]]
-        else:
-            print(f"[ERROR] Array index {array_idx} out of range (0 to {len(tasks)-1})")
-            sys.exit(1)
+    is_array_job = (array_idx is not None)
 
-    print(f"\nFound {len(tasks)} DM trial(s) to search:")
-    for i, t in enumerate(tasks, 1):
-        print(f"  [{i:2d}/{len(tasks):2d}] DM = {t['dm']:6.1f} pc cm^-3 | {os.path.basename(t['real'])}")
+    if is_array_job:
+        if 0 <= array_idx < len(tasks):
+            assigned_task = tasks[array_idx]
+            print("\n=================================================================")
+            print(f"  [SLURM ARRAY TASK ID: {array_idx}] Assigned 1 of {len(tasks)} DM trials")
+            print(f"  Target DM  : {assigned_task['dm']:.1f} pc cm^-3")
+            print(f"  Input File : {os.path.basename(assigned_task['real'])}")
+            print("=================================================================")
+            tasks = [assigned_task]
+        else:
+            print(f"[ERROR] Array index {array_idx} out of range (valid: 0 to {len(tasks)-1})")
+            sys.exit(1)
+    else:
+        print(f"\nBatch Mode: Found {len(tasks)} DM trial(s) to search sequentially:")
+        for i, t in enumerate(tasks, 1):
+            print(f"  [{i:2d}/{len(tasks):2d}] DM = {t['dm']:6.1f} pc cm^-3 | {os.path.basename(t['real'])}")
 
     # Pre-plan FFA using the first cube's dimensions
     with fits.open(tasks[0]["real"], memmap=True) as h0:
@@ -422,34 +519,19 @@ def main():
 
     all_results = []
     for idx, task in enumerate(tasks, 1):
-        print(f"\n>>> Progress: Running trial {idx}/{len(tasks)} (DM = {task['dm']:.1f} pc cm^-3) <<<")
+        if not is_array_job:
+            print(f"\n>>> Running trial {idx}/{len(tasks)} (DM = {task['dm']:.1f} pc cm^-3) <<<")
         res = search_single_dm(task["real"], task["imag"], task["dm"], args, plans, total_trials)
         if res:
             all_results.append(res)
 
     t_total = time.time() - t_start
-    print(f"\n=================================================================")
-    print(f"                MULTI-DM SEARCH SUMMARY TABLE                    ")
-    print(f"=================================================================")
 
-    if all_results:
-        df_summary = pd.DataFrame(all_results).sort_values("dm")
-        csv_file = f"{args.out_prefix}_all_dms_summary.csv"
-        df_summary.to_csv(csv_file, index=False)
-        print(f"Saved summary CSV to: {csv_file}\n")
+    # If running sequentially (not single array task) with multiple results, summarize now
+    if not is_array_job and all_results:
+        collate_results(args.out_prefix, args.cand_x, args.cand_y)
 
-        print(df_summary[["dm", "cand_snr", "cand_period", "blind_snr", "blind_period", "blind_x", "blind_y"]].to_string(index=False))
-
-        # Multi-DM diagnostic curve
-        plot_dm_curve(all_results, args.out_prefix, args.cand_x, args.cand_y)
-
-        best_cand = df_summary.loc[df_summary["cand_snr"].idxmax()]
-        print(f"\nTOP CANDIDATE DETECTION AT ({args.cand_x}, {args.cand_y}):")
-        print(f"  Best DM    : {best_cand['dm']:.1f} pc cm^-3")
-        print(f"  Best Period: {best_cand['cand_period']:.5f} s")
-        print(f"  Peak S/N   : {best_cand['cand_snr']:.2f}")
-
-    print(f"\nTotal Search Run Time: {t_total:.1f}s ({t_total/60:.2f} min).")
+    print(f"\nTask completed in {t_total:.1f}s ({t_total/60:.2f} min).")
 
 
 if __name__ == "__main__":
