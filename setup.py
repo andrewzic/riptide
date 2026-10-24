@@ -1,5 +1,6 @@
 import os
 import sys
+import glob
 import platform
 from setuptools import setup
 from pybind11.setup_helpers import Pybind11Extension, build_ext
@@ -40,7 +41,20 @@ for cand in candidate_ducc_roots:
         ducc_src = os.path.join(cand, "src")
         for lib_sub in ["build_cpp", "build", "build_cpp/src", "build/src", ""]:
             cand_lib = os.path.join(cand, lib_sub) if lib_sub else cand
-            if os.path.isfile(os.path.join(cand_lib, "libducc0.a")) or os.path.isfile(os.path.join(cand_lib, "libducc0.so")):
+            # Check if cmake built a shared object without 'lib' prefix (e.g. ducc0.cpython-...so)
+            target_so = os.path.join(cand_lib, "libducc0.so")
+            target_a = os.path.join(cand_lib, "libducc0.a")
+            if not os.path.isfile(target_so) and not os.path.isfile(target_a):
+                ducc_sos = glob.glob(os.path.join(cand_lib, "ducc0*.so"))
+                if ducc_sos:
+                    try:
+                        if not os.path.exists(target_so):
+                            os.symlink(os.path.basename(ducc_sos[0]), target_so)
+                            print(f"[setup.py] Created symlink {target_so} -> {os.path.basename(ducc_sos[0])}")
+                    except Exception as e:
+                        print(f"[setup.py] Warning creating symlink: {e}")
+
+            if os.path.isfile(target_a) or os.path.isfile(target_so):
                 include_dirs.append(ducc_src if os.path.isdir(ducc_src) else cand)
                 library_dirs.append(cand_lib)
                 extra_link_args.append(f"-Wl,-rpath,{cand_lib}")
