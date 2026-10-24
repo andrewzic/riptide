@@ -241,14 +241,24 @@ def search_single_dm(real_file, imag_file, dm, args, plans=None, total_trials=No
     blind_y, blind_x = np.unravel_index(np.argmax(blind_best_frame), (ny, nx))
     blind_x, blind_y = int(blind_x), int(blind_y)
 
-    # WCS Coordinates
+    # WCS Coordinates for synthesized sky image plane
+    w = None
     try:
-        w = WCS(hdr).celestial
+        w_cand = WCS(hdr).celestial
+        if w_cand.has_celestial and w_cand.pixel_n_dim == 2:
+            w = w_cand
     except Exception:
+        pass
+
+    if w is None:
         w = WCS(naxis=2)
         w.wcs.crpix = [193.0, 193.0]
         w.wcs.cdelt = [-22.0 / 3600.0, 22.0 / 3600.0]
-        w.wcs.crval = [264.238783892833, -23.582287754619]
+        ra_center = 264.238783892833
+        dec_center = -23.582287754619
+        if "LATPOLE" in hdr and abs(float(hdr["LATPOLE"])) > 0:
+            dec_center = float(hdr["LATPOLE"])
+        w.wcs.crval = [ra_center, dec_center]
         w.wcs.ctype = ["RA---SIN", "DEC--SIN"]
 
     coord_cand = w.pixel_to_world(cx, cy)
