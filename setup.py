@@ -16,8 +16,8 @@ SAFE_FAST_MATH_FLAGS = [
 
 include_dirs = []
 library_dirs = []
-extra_link_args = ["-pthread"]
-extra_compile_args = ["-O3", "-std=c++17", "-pthread"] + SAFE_FAST_MATH_FLAGS
+extra_link_args = ["-pthread", "-fno-lto"]
+extra_compile_args = ["-O3", "-std=c++17", "-pthread", "-fno-lto"] + SAFE_FAST_MATH_FLAGS
 
 if platform.machine() in ("x86_64", "AMD64"):
     # Target AVX2 / FMA baseline supported by both Intel Skylake and AMD Milan;
