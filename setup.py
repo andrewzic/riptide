@@ -26,24 +26,42 @@ if platform.machine() in ("x86_64", "AMD64"):
 libraries = ["ducc0"]
 
 # Path to local ducc static library build and headers
-ducc_root = os.environ.get(
-    "DUCCDIR",
-    os.path.normpath(
-        os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "..",
-            "ducc",
-        )
-    ),
-)
-if os.path.isdir(ducc_root):
-    ducc_src = os.path.join(ducc_root, "src")
-    ducc_lib = os.path.join(ducc_root, "build_cpp")
-    if os.path.isdir(ducc_src):
-        include_dirs.append(ducc_src)
-    if os.path.isdir(ducc_lib):
-        library_dirs.append(ducc_lib)
-        extra_link_args.append(f"-Wl,-rpath,{ducc_lib}")
+candidate_ducc_roots = [
+    os.environ.get("DUCCDIR", ""),
+    "/fred/oz451/azic/scripts/src/ducc",
+    os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ducc")),
+    os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "ducc")),
+    os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "src", "ducc")),
+]
+
+ducc_found = False
+for cand in candidate_ducc_roots:
+    if cand and os.path.isdir(cand):
+        ducc_src = os.path.join(cand, "src")
+        for lib_sub in ["build_cpp", "build", "build_cpp/src", "build/src", ""]:
+            cand_lib = os.path.join(cand, lib_sub) if lib_sub else cand
+            if os.path.isfile(os.path.join(cand_lib, "libducc0.a")) or os.path.isfile(os.path.join(cand_lib, "libducc0.so")):
+                include_dirs.append(ducc_src if os.path.isdir(ducc_src) else cand)
+                library_dirs.append(cand_lib)
+                extra_link_args.append(f"-Wl,-rpath,{cand_lib}")
+                ducc_found = True
+                print(f"[setup.py] Found ducc headers at {ducc_src}, library at {cand_lib}")
+                break
+        if not ducc_found and os.path.isdir(cand):
+            # Fallback if library hasn't been built yet or has custom name
+            ducc_lib = os.path.join(cand, "build_cpp")
+            if os.path.isdir(ducc_src):
+                include_dirs.append(ducc_src)
+            if os.path.isdir(ducc_lib):
+                library_dirs.append(ducc_lib)
+                extra_link_args.append(f"-Wl,-rpath,{ducc_lib}")
+                ducc_found = True
+                print(f"[setup.py] Using fallback ducc at {cand}, lib at {ducc_lib}")
+        if ducc_found:
+            break
+
+if not ducc_found:
+    print("[setup.py] WARNING: Could not find DUCC directory or libducc0 archive!")
 
 fftwd_dir = os.environ.get("FFTWDIR")
 if fftwd_dir:
