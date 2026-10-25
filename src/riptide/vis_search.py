@@ -469,32 +469,29 @@ def uv_ffa_streaming_search(
         ffa_arr = ffa_res.ffa_array  # (N_active_uv, N_periods, bins)
         n_periods = ffa_arr.shape[1]
 
-        # Vectorized filling of oversampled grid
-        ffa_trans = np.ascontiguousarray(np.transpose(ffa_arr, (1, 2, 0)))  # (n_periods, bins, N_active_uv)
-        grid_cand = np.zeros((n_periods, bins, nu, nv), dtype=np.complex64)
-        grid_cand[:, :, unique_uv[:, 0], unique_uv[:, 1]] = ffa_trans
-
-        # Construct Hermitian Hartley grid
-        rgrid_cube = 0.5 * (
-            grid_cand.real - grid_cand.imag +
-            grid_cand[:, :, xu[:, None], xv[None, :]].real +
-            grid_cand[:, :, xu[:, None], xv[None, :]].imag
-        ).astype(np.float32)
-
-        # 2D Fast Hartley Transform across spatial dimensions (-2, -1)
-        im_full = ducc0.fft.genuine_fht(rgrid_cube, axes=(-2, -1), nthreads=nthreads)
-        dirty_cube = im_full[..., ix[:, None], jx[None, :]] * cf_2d  # (n_periods, bins, nx, ny)
-
-        # Robust pulse profile SNR per pixel across phase bins:
-        # Evaluates peak prominence above off-pulse noise floor (MAD)
-        p_med = np.median(dirty_cube, axis=1)  # (n_periods, nx, ny)
-        p_mad = np.median(np.abs(dirty_cube - p_med[:, np.newaxis, :, :]), axis=1) * 1.4826 + 1e-12
-        p_max = np.max(dirty_cube, axis=1)
-        snr_cube = (p_max - p_med) / p_mad  # (n_periods, nx, ny)
-
-        # For each trial period, record max SNR in the image plane
+        # Stream trial periods with minimal memory footprint (30 MB per period)
         for ip, p_val in enumerate(ffa_res.periods):
-            snr_plane = snr_cube[ip]
+            grid_cand = np.zeros((bins, nu, nv), dtype=np.complex64)
+            grid_cand[:, unique_uv[:, 0], unique_uv[:, 1]] = ffa_arr[:, ip, :].T
+
+            # Construct Hermitian Hartley grid
+            rgrid_cube = 0.5 * (
+                grid_cand.real - grid_cand.imag +
+                grid_cand[:, xu[:, None], xv[None, :]].real +
+                grid_cand[:, xu[:, None], xv[None, :]].imag
+            ).astype(np.float32)
+
+            # 2D Fast Hartley Transform across spatial dimensions (-2, -1)
+            im_full = ducc0.fft.genuine_fht(rgrid_cube, axes=(-2, -1), nthreads=nthreads)
+            dirty_cube = im_full[..., ix[:, None], jx[None, :]] * cf_2d  # (bins, nx, ny)
+
+            # Robust pulse profile SNR per pixel across phase bins:
+            # Evaluates peak prominence above off-pulse noise floor (MAD)
+            p_med = np.median(dirty_cube, axis=0)  # (nx, ny)
+            p_mad = np.median(np.abs(dirty_cube - p_med[np.newaxis, :, :]), axis=0) * 1.4826 + 1e-12
+            p_max = np.max(dirty_cube, axis=0)
+            snr_plane = (p_max - p_med) / p_mad  # (nx, ny)
+
             peak_pix = np.unravel_index(np.argmax(snr_plane), snr_plane.shape)
             max_p_snr = float(snr_plane[peak_pix])
 
@@ -502,7 +499,7 @@ def uv_ffa_streaming_search(
             all_snrs.append(max_p_snr)
 
             if max_p_snr >= snr_thresh:
-                best_bin = int(np.argmax(dirty_cube[ip, :, peak_pix[0], peak_pix[1]]))
+                best_bin = int(np.argmax(dirty_cube[:, peak_pix[0], peak_pix[1]]))
                 candidates.append({
                     "period": float(p_val),
                     "snr": max_p_snr,
@@ -510,8 +507,8 @@ def uv_ffa_streaming_search(
                     "bins": int(bins),
                     "best_bin": best_bin,
                     "peak_pixel": peak_pix,
-                    "image": dirty_cube[ip, best_bin],
-                    "profile": dirty_cube[ip, :, peak_pix[0], peak_pix[1]],
+                    "image": dirty_cube[best_bin],
+                    "profile": dirty_cube[:, peak_pix[0], peak_pix[1]],
                 })
 
     # Sort candidates by descending SNR

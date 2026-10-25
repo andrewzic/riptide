@@ -965,6 +965,8 @@ class VisTimeSeries(object):
 
             if vis_3d.ndim == 2:
                 vis_3d = vis_3d[:, np.newaxis, :]
+            if wgt_3d is not None and wgt_3d.ndim == 2:
+                wgt_3d = wgt_3d[:, np.newaxis, :]
             nbl, nchan, nt = vis_3d.shape
             chan_freq = np.asarray(chan_freq, dtype=np.float64)
 
