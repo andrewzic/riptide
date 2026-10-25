@@ -508,6 +508,7 @@ def uv_ffa_streaming_search(
                     "best_bin": best_bin,
                     "peak_pixel": peak_pix,
                     "image": dirty_cube[best_bin],
+                    "snr_image": snr_plane,
                     "profile": dirty_cube[:, peak_pix[0], peak_pix[1]],
                 })
 

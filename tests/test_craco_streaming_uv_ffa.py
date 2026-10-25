@@ -134,36 +134,54 @@ def test_craco_streaming_uv_ffa_benchmark():
     assert pix_det == (target_x, target_y), f"Pixel mismatch: {pix_det} vs ({target_x}, {target_y})"
     assert snr_det > 50.0, f"Detection SNR {snr_det:.1f} is unexpectedly low"
 
-    # 5. Diagnostic Plotting
+    # 5. Diagnostic Plotting (4-Panel View)
     plot_file = "craco_384_uv_ffa_candidate.png"
-    fig, axes = plt.subplots(1, 3, figsize=(16, 5))
+    fig, axes = plt.subplots(1, 4, figsize=(22, 5))
 
-    # A: Dirty image at peak phase bin
-    im = axes[0].imshow(top["image"].T, origin="lower", cmap="inferno")
-    axes[0].plot(target_x, target_y, "c+", markersize=14, markeredgewidth=2, label=f"Candidate ({target_x}, {target_y})")
-    axes[0].set_title(f"Reconstructed Dirty Image\nP = {p_det:.4f} s, SNR = {snr_det:.1f}")
+    # Panel 1: Full-field dirty image with non-obstructing open target ring
+    im0 = axes[0].imshow(top["image"].T, origin="lower", cmap="inferno")
+    # Draw an open dashed circular reticle around the target (leaves central pixels completely clear)
+    target_circle = plt.Circle((target_x, target_y), radius=16, fill=False, edgecolor="cyan", lw=1.8, ls="--")
+    axes[0].add_patch(target_circle)
+    axes[0].text(target_x + 20, target_y + 20, f"({target_x}, {target_y})", color="cyan", fontsize=11, fontweight="bold")
+    axes[0].set_title(f"Full Field ({npix_x}x{npix_y}, 22''/pix)\nP = {p_det:.4f} s, SNR = {snr_det:.1f}")
     axes[0].set_xlabel("X Pixel (RA)")
     axes[0].set_ylabel("Y Pixel (Dec)")
-    axes[0].legend(loc="upper right")
-    plt.colorbar(im, ax=axes[0], label="Flux Density (a.u.)")
+    plt.colorbar(im0, ax=axes[0], fraction=0.046, pad=0.04, label="Intensity (a.u.)")
 
-    # B: Folded Pulse Profile at candidate pixel
+    # Panel 2: High-resolution zoom cutout (40x40 pixels) centered on candidate
+    cut_rad = 20
+    x_min, x_max = target_x - cut_rad, target_x + cut_rad
+    y_min, y_max = target_y - cut_rad, target_y + cut_rad
+    cutout = top["image"].T[y_min:y_max, x_min:x_max]
+    im1 = axes[1].imshow(cutout, origin="lower", cmap="inferno", extent=[x_min, x_max, y_min, y_max])
+    # Open reticle corners / tick marks outside the PSF core
+    axes[1].plot([x_min + 3, x_min + 8], [target_y, target_y], color="cyan", lw=1.5)
+    axes[1].plot([x_max - 8, x_max - 3], [target_y, target_y], color="cyan", lw=1.5)
+    axes[1].plot([target_x, target_x], [y_min + 3, y_min + 8], color="cyan", lw=1.5)
+    axes[1].plot([target_x, target_x], [y_max - 8, y_max - 3], color="cyan", lw=1.5)
+    axes[1].set_title(f"Zoom Cutout ({2*cut_rad}x{2*cut_rad} pix)\nClear Point Source & PSF Core")
+    axes[1].set_xlabel("X Pixel (RA)")
+    axes[1].set_ylabel("Y Pixel (Dec)")
+    plt.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04, label="Intensity (a.u.)")
+
+    # Panel 3: Folded Pulse Profile at candidate pixel
     phase_axis = np.linspace(0, 1, top["bins"], endpoint=False)
-    axes[1].step(phase_axis, top["profile"], where="mid", color="navy", lw=2)
-    axes[1].set_title(f"Folded Pulse Profile ({top['bins']} bins)\nPixel ({target_x}, {target_y})")
-    axes[1].set_xlabel("Pulse Phase")
-    axes[1].set_ylabel("Intensity")
-    axes[1].grid(True, alpha=0.3)
-
-    # C: Periodogram around target period
-    sort_idx = np.argsort(results["periods"])
-    axes[2].plot(results["periods"][sort_idx], results["snrs"][sort_idx], color="firebrick", lw=1.5)
-    axes[2].axvline(p_inj, color="black", linestyle="--", alpha=0.7, label=f"True Period ({p_inj:.3f} s)")
-    axes[2].set_title(f"UV-FFA Periodogram\nPeak SNR = {snr_det:.1f}")
-    axes[2].set_xlabel("Trial Period (s)")
-    axes[2].set_ylabel("Profile SNR (MAD)")
-    axes[2].legend(loc="upper right")
+    axes[2].step(phase_axis, top["profile"], where="mid", color="navy", lw=2)
+    axes[2].set_title(f"Folded Pulse Profile ({top['bins']} bins)\nPixel ({target_x}, {target_y})")
+    axes[2].set_xlabel("Pulse Phase")
+    axes[2].set_ylabel("Intensity")
     axes[2].grid(True, alpha=0.3)
+
+    # Panel 4: Periodogram around target period
+    sort_idx = np.argsort(results["periods"])
+    axes[3].plot(results["periods"][sort_idx], results["snrs"][sort_idx], color="firebrick", lw=1.5)
+    axes[3].axvline(p_inj, color="black", linestyle="--", alpha=0.7, label=f"True P = {p_inj:.3f} s")
+    axes[3].set_title(f"UV-FFA Periodogram\nPeak SNR = {snr_det:.1f}")
+    axes[3].set_xlabel("Trial Period (s)")
+    axes[3].set_ylabel("Profile SNR (MAD)")
+    axes[3].legend(loc="upper right")
+    axes[3].grid(True, alpha=0.3)
 
     plt.tight_layout()
     plt.savefig(plot_file, dpi=150)
