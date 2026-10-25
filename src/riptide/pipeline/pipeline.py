@@ -620,6 +620,9 @@ class VisPipeline(object):
         pixsize_y = override_kwargs.pop("pixsize_y", img_conf.get("pixsize_y", 22.0 / 206265.0))
         snr_thresh = override_kwargs.pop("snr_thresh", self.config.get("snr_thresh", 8.0))
         nthreads = override_kwargs.pop("nthreads", self.config.get("nthreads", 4))
+        dm = override_kwargs.pop("dm", self.config.get("dmselect", {}).get("min", 0.0))
+        exact_uvw = override_kwargs.pop("exact_uvw", True)
+        collapse_channels = override_kwargs.pop("collapse_channels", False)
 
         return uv_ffa_streaming_search(
             data,
@@ -627,6 +630,9 @@ class VisPipeline(object):
             period_max=override_kwargs.pop("period_max", pmax),
             bins_min=override_kwargs.pop("bins_min", bmin),
             bins_max=override_kwargs.pop("bins_max", bmax),
+            dm=dm,
+            exact_uvw=exact_uvw,
+            collapse_channels=collapse_channels,
             nx=nx,
             ny=ny,
             pixsize_x=pixsize_x,

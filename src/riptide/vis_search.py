@@ -359,6 +359,9 @@ def uv_ffa_streaming_search(
     period_max=300.0,
     bins_min=16,
     bins_max=64,
+    dm=0.0,
+    exact_uvw=True,
+    collapse_channels=False,
     nx=384,
     ny=384,
     pixsize_x=22.0 / 206265.0,
@@ -372,7 +375,8 @@ def uv_ffa_streaming_search(
 ):
     """
     Direct visibility streaming UV-domain FFA search.
-    Streams raw visibility timestamps into oversampled 2D UV grids via ducc0.wgridder.vis2grid,
+    Supports Option C exact visibility dedispersion and per-channel baseline migration tracking.
+    Streams dedispersed visibility timestamps into oversampled 2D UV grids via ducc0.wgridder.vis2grid,
     builds the Dynamic Grid Array (DGA) in memory without intermediate FITS cubes,
     executes the C++ Fast Folding Algorithm on each active UV cell, and reconstructs
     candidate dirty images with kernel deconvolution for detected periodic signals.
@@ -385,6 +389,14 @@ def uv_ffa_streaming_search(
         Trial period search range in seconds.
     bins_min, bins_max : int
         Phase folding bin range (e.g. 16 to 64).
+    dm : float
+        Dispersion measure in pc/cm^3 (default: 0.0).
+    exact_uvw : bool
+        If True (Option C), computes exact per-channel (u, v, w) delay tracks and dimensionless
+        wavelength scaling, preserving maximum spatial frequency fidelity.
+    collapse_channels : bool
+        If True, collapses channels into 1 frequency before gridding.
+        If False (default for Option C), grids all pseudo-baselines with exact wavelength coordinates.
     nx, ny : int
         Dirty image dimensions.
     pixsize_x, pixsize_y : float
@@ -408,6 +420,46 @@ def uv_ffa_streaming_search(
     import ducc0
     from .time_series import VisTimeSeries
     from .ffautils import plan_ffa
+
+    # Option C Dedispersion & Exact UVW preparation
+    if isinstance(msname_or_data, (tuple, list)) and len(msname_or_data) >= 4:
+        vis_raw = msname_or_data[0]
+        if vis_raw.ndim == 3 and vis_raw.shape[1] > 1:
+            try:
+                from fastducc.baseline_ffa import prepare_baseline_series
+                vis_3d = msname_or_data[0]
+                wgt_3d = msname_or_data[1] if len(msname_or_data) == 5 else None
+                uvw_3d = msname_or_data[2] if len(msname_or_data) == 5 else msname_or_data[1]
+                chan_freq = msname_or_data[3] if len(msname_or_data) == 5 else msname_or_data[2]
+                dt = msname_or_data[4] if len(msname_or_data) == 5 else msname_or_data[3]
+
+                vis_2d, wgt_2d, uvw_track, eff_freq, dt = prepare_baseline_series(
+                    vis_3d, wgt_3d, uvw_3d, chan_freq, dt,
+                    dm=dm, collapse_channels=collapse_channels, exact_uvw=exact_uvw
+                )
+                msname_or_data = (vis_2d, wgt_2d, uvw_track, eff_freq, dt)
+            except ImportError:
+                pass
+    elif isinstance(msname_or_data, str) and (dm != 0.0 or exact_uvw):
+        try:
+            from fastducc.imaging import load_chunk_data
+            from fastducc.baseline_ffa import prepare_baseline_series
+            start_idx = kwargs.pop("start_time_idx", None)
+            end_idx = kwargs.pop("end_time_idx", None)
+            times, chan_freq, dt, vis_3d, wgt_3d, uvw_3d = load_chunk_data(
+                msname_or_data,
+                start_time_idx=start_idx,
+                end_time_idx=end_idx,
+                corr_mode="average",
+                average_correlations=True
+            )
+            vis_2d, wgt_2d, uvw_track, eff_freq, dt = prepare_baseline_series(
+                vis_3d, wgt_3d, uvw_3d, chan_freq, dt,
+                dm=dm, collapse_channels=collapse_channels, exact_uvw=exact_uvw
+            )
+            msname_or_data = (vis_2d, wgt_2d, uvw_track, eff_freq, dt)
+        except ImportError:
+            pass
 
     # 1. Stream visibilities directly into VisTimeSeries
     vis_ts = VisTimeSeries.from_visibility_stream(
