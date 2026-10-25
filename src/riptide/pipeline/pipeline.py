@@ -515,14 +515,17 @@ class VisPipeline(object):
                 return dict(rng)
 
     @timing
-    def prepare(self, real_files, imag_files):
+    def prepare(self, real_files=None, imag_files=None, msname_or_data=None):
         """
-        Inspect input files and select a minimal set to process
+        Inspect input files or measurement set and select a minimal set to process
 
-        files: list
+        files: list, optional
+        msname_or_data: str or tuple, optional
         """
         log.info("Preparing pipeline")
-        log.debug("Input files: {}".format(len(real_files)))
+        self.msname_or_data = msname_or_data
+        if real_files is not None:
+            log.debug("Input files: {}".format(len(real_files)))
         conf = self.config
 
         #ignore DM for now
@@ -579,6 +582,59 @@ class VisPipeline(object):
             candidates = self.worker_pool.process_uvcells_basep(real_file, imag_file)
             all_candidates.append(candidates)
         return all_candidates
+
+    @timing
+    def streaming_search(self, msname_or_data=None, **override_kwargs):
+        """
+        Direct visibility streaming UV-domain FFA search without intermediate FITS cubes.
+        Uses ducc0.wgridder.vis2grid to grid timestamps into 2D Dynamic Grid Array and runs
+        the FFA search.
+
+        Parameters
+        ----------
+        msname_or_data : str, tuple, or list, optional
+            Measurement Set path or tuple of (vis_3d, wgt_3d, uvw_3d, chan_freq, dt).
+            If None, uses self.msname_or_data passed to prepare().
+        override_kwargs : dict
+            Optional parameter overrides (nx, ny, snr_thresh, nthreads, etc.).
+        """
+        from ..vis_search import uv_ffa_streaming_search
+
+        data = msname_or_data if msname_or_data is not None else getattr(self, "msname_or_data", None)
+        if data is None:
+            raise ValueError("msname_or_data must be provided either in prepare() or streaming_search().")
+
+        ranges = self.config.get("ranges", [])
+        if ranges:
+            pmin = min(r["ffa_search"]["period_min"] for r in ranges)
+            pmax = max(r["ffa_search"]["period_max"] for r in ranges)
+            bmin = min(r["ffa_search"]["bins_min"] for r in ranges)
+            bmax = max(r["ffa_search"]["bins_max"] for r in ranges)
+        else:
+            pmin, pmax, bmin, bmax = 1.0, 300.0, 16, 64
+
+        img_conf = self.config.get("image", {})
+        nx = override_kwargs.pop("nx", img_conf.get("nx", 384))
+        ny = override_kwargs.pop("ny", img_conf.get("ny", 384))
+        pixsize_x = override_kwargs.pop("pixsize_x", img_conf.get("pixsize_x", 22.0 / 206265.0))
+        pixsize_y = override_kwargs.pop("pixsize_y", img_conf.get("pixsize_y", 22.0 / 206265.0))
+        snr_thresh = override_kwargs.pop("snr_thresh", self.config.get("snr_thresh", 8.0))
+        nthreads = override_kwargs.pop("nthreads", self.config.get("nthreads", 4))
+
+        return uv_ffa_streaming_search(
+            data,
+            period_min=override_kwargs.pop("period_min", pmin),
+            period_max=override_kwargs.pop("period_max", pmax),
+            bins_min=override_kwargs.pop("bins_min", bmin),
+            bins_max=override_kwargs.pop("bins_max", bmax),
+            nx=nx,
+            ny=ny,
+            pixsize_x=pixsize_x,
+            pixsize_y=pixsize_y,
+            snr_thresh=snr_thresh,
+            nthreads=nthreads,
+            **override_kwargs
+        )
     
     @timing
     def vis_search_basep_dask(self, real_files, imag_files,

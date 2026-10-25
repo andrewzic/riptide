@@ -855,6 +855,178 @@ class VisTimeSeries(object):
                    nu=v_slice.stop - v_slice.start,
                    nv=u_slice.stop - u_slice.start,
                    du=du, dv=dv, header=header)
+
+    @classmethod
+    def from_visibility_stream(
+        cls,
+        msname_or_data,
+        npix_x=384,
+        npix_y=384,
+        pixsize_x=22.0 / 206265.0,
+        pixsize_y=22.0 / 206265.0,
+        epsilon=1e-5,
+        threshold=1e-4,
+        nthreads=1,
+        sigma_min=1.1,
+        sigma_max=2.6,
+        phase_centre=None,
+        start_time_idx=None,
+        end_time_idx=None,
+        direct_dga=True
+    ):
+        """
+        Directly stream visibility timestamps into a gridded VisTimeSeries container
+        using ducc0.wgridder.vis2grid, eliminating intermediate 3D FITS cubes.
+
+        Parameters
+        ----------
+        msname_or_data : str, tuple, or list
+            Path to Measurement Set or tuple of (vis_3d, wgt_3d, uvw_3d, chan_freq, dt).
+            - vis_3d: (nbl, nchan, nt) or (nbl, nt)
+            - wgt_3d: (nbl, nchan, nt) or None
+            - uvw_3d: (nbl, 3, nt) or (nbl, 3) in meters
+            - chan_freq: 1D array of channel frequencies in Hz
+            - dt: float sampling time in seconds
+        npix_x, npix_y : int
+            Target dirty image dimensions in pixels.
+        pixsize_x, pixsize_y : float
+            Projected pixel angular resolution in radians.
+        epsilon : float
+            DUCC gridding precision tolerance (e.g. 1e-5).
+        threshold : float
+            Cutoff amplitude for sparse UV cell retention.
+        nthreads : int
+            Number of CPU threads for parallel DUCC C++ gridding.
+        direct_dga : bool
+            If True, construct the 2D Dynamic Grid Array directly in memory.
+        """
+        import ducc0
+
+        # 1. Parse input
+        if isinstance(msname_or_data, str):
+            try:
+                from casacore.tables import table
+            except ImportError:
+                raise ImportError("casacore is required to stream from a Measurement Set.")
+            with table(msname_or_data, readonly=True, ack=False) as t_main:
+                with table(f"{msname_or_data}/SPECTRAL_WINDOW", readonly=True, ack=False) as t_spw:
+                    chan_freq = np.asarray(t_spw.getcol("CHAN_FREQ")[0], dtype=np.float64)
+                times = t_main.getcol("TIME")
+                unique_times = np.unique(times)
+                if start_time_idx is not None or end_time_idx is not None:
+                    unique_times = unique_times[slice(start_time_idx, end_time_idx)]
+                nt = len(unique_times)
+                dt = float(np.median(np.diff(unique_times))) if nt > 1 else 0.110
+
+                t0_sub = t_main.query(f"TIME == {unique_times[0]}")
+                uvw_0 = np.asarray(t0_sub.getcol("UVW"), dtype=np.float64)
+                vis_0 = np.asarray(t0_sub.getcol("DATA"), dtype=np.complex64)
+                if vis_0.ndim == 3 and vis_0.shape[-1] > 1:
+                    vis_0 = np.mean(vis_0, axis=-1)
+                t0_sub.close()
+
+                grid_0, cfu, cfv = ducc0.wgridder.vis2grid(
+                    uvw=uvw_0, freq=chan_freq, vis=vis_0,
+                    npix_x=npix_x, npix_y=npix_y,
+                    pixsize_x=pixsize_x, pixsize_y=pixsize_y,
+                    epsilon=epsilon, nthreads=nthreads,
+                    sigma_min=sigma_min, sigma_max=sigma_max,
+                    return_corfunc=True
+                )
+                nu, nv = grid_0.shape
+
+                uv_cube = np.zeros((nt, nu, nv), dtype=np.complex64)
+                uv_cube[0] = grid_0
+                grid_buf = np.zeros((nu, nv), dtype=np.complex64)
+                for it, t_val in enumerate(unique_times[1:], start=1):
+                    t_sub = t_main.query(f"TIME == {t_val}")
+                    uvw_t = np.asarray(t_sub.getcol("UVW"), dtype=np.float64)
+                    vis_t = np.asarray(t_sub.getcol("DATA"), dtype=np.complex64)
+                    if vis_t.ndim == 3 and vis_t.shape[-1] > 1:
+                        vis_t = np.mean(vis_t, axis=-1)
+                    t_sub.close()
+                    ducc0.wgridder.vis2grid(
+                        uvw=uvw_t, freq=chan_freq, vis=vis_t,
+                        npix_x=npix_x, npix_y=npix_y,
+                        pixsize_x=pixsize_x, pixsize_y=pixsize_y,
+                        epsilon=epsilon, nthreads=nthreads,
+                        sigma_min=sigma_min, sigma_max=sigma_max,
+                        grid=grid_buf
+                    )
+                    uv_cube[it] = grid_buf
+        elif isinstance(msname_or_data, (tuple, list)):
+            if len(msname_or_data) == 5:
+                vis_3d, wgt_3d, uvw_3d, chan_freq, dt = msname_or_data
+            elif len(msname_or_data) == 4:
+                vis_3d, uvw_3d, chan_freq, dt = msname_or_data
+                wgt_3d = None
+            else:
+                raise ValueError("Tuple input must be (vis, uvw, chan_freq, dt) or (vis, wgt, uvw, chan_freq, dt)")
+
+            if vis_3d.ndim == 2:
+                vis_3d = vis_3d[:, np.newaxis, :]
+            nbl, nchan, nt = vis_3d.shape
+            chan_freq = np.asarray(chan_freq, dtype=np.float64)
+
+            uvw_0 = uvw_3d[..., 0] if uvw_3d.ndim == 3 else uvw_3d
+            vis_0 = vis_3d[..., 0]
+            wgt_0 = wgt_3d[..., 0] if wgt_3d is not None else None
+
+            grid_0, cfu, cfv = ducc0.wgridder.vis2grid(
+                uvw=uvw_0, freq=chan_freq, vis=vis_0, wgt=wgt_0,
+                npix_x=npix_x, npix_y=npix_y,
+                pixsize_x=pixsize_x, pixsize_y=pixsize_y,
+                epsilon=epsilon, nthreads=nthreads,
+                sigma_min=sigma_min, sigma_max=sigma_max,
+                return_corfunc=True
+            )
+            nu, nv = grid_0.shape
+
+            uv_cube = np.zeros((nt, nu, nv), dtype=np.complex64)
+            uv_cube[0] = grid_0
+            grid_buf = np.zeros((nu, nv), dtype=np.complex64)
+
+            for it in range(1, nt):
+                uvw_t = uvw_3d[..., it] if uvw_3d.ndim == 3 else uvw_3d
+                vis_t = vis_3d[..., it]
+                wgt_t = wgt_3d[..., it] if wgt_3d is not None else None
+                ducc0.wgridder.vis2grid(
+                    uvw=uvw_t, freq=chan_freq, vis=vis_t, wgt=wgt_t,
+                    npix_x=npix_x, npix_y=npix_y,
+                    pixsize_x=pixsize_x, pixsize_y=pixsize_y,
+                    epsilon=epsilon, nthreads=nthreads,
+                    sigma_min=sigma_min, sigma_max=sigma_max,
+                    grid=grid_buf
+                )
+                uv_cube[it] = grid_buf
+        else:
+            raise TypeError("Unsupported msname_or_data type: must be MS path or tuple.")
+
+        du = 1.0 / (nu * pixsize_x)
+        dv = 1.0 / (nv * pixsize_y)
+
+        if threshold > 0 and sparse is not None:
+            grid_data = sparse.COO(np.where(np.abs(uv_cube) > threshold, uv_cube, 0))
+        elif threshold > 0:
+            grid_data = np.where(np.abs(uv_cube) > threshold, uv_cube, 0).astype(np.complex64)
+        else:
+            grid_data = uv_cube
+
+        obj = cls(
+            grid_data, tsamp=dt, dtype=np.complex64,
+            nu=nu, nv=nv, du=du, dv=dv, phase_centre=phase_centre
+        )
+        obj.cfu = cfu
+        obj.cfv = cfv
+        obj.npix_x = npix_x
+        obj.npix_y = npix_y
+        obj.pixsize_x = pixsize_x
+        obj.pixsize_y = pixsize_y
+
+        if direct_dga:
+            obj.make_dynamic_grid_array()
+
+        return obj
     
     # @classmethod
     # def from_real_imag_cube_chunked(cls, real_cube_file, imag_cube_file,
@@ -1011,7 +1183,11 @@ class VisTimeSeries(object):
     def nsamp(self):
         """Number of samples in the data."""
         #assuming time is along first axis
-        return self.data.shape[0]
+        if self.data is not None:
+            return self.data.shape[0]
+        elif hasattr(self, 'dga') and self.dga is not None:
+            return self.dga.shape[1]
+        return 0
 
     @property
     def img_size(self):
