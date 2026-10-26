@@ -210,5 +210,120 @@ def test_craco_option_c_dedisp_streaming():
     print("\n>> OPTION C CRACO DEDISPERSION & STREAMING UV-FFA TEST PASSED!")
 
 
+def test_craco_high_dm_1000_1deg_offaxis_streaming():
+    """
+    Real CRACO MS injection and recovery test for an extreme high-DM (DM = 1000 pc cm^-3),
+    highly off-axis (~1.0 degree from phase centre) periodic pulsar.
+    """
+    print("\n=========================================================================")
+    print("CRACO HIGH-DM (1000 pc/cm^3) & 1-DEG OFF-AXIS STREAMING UV-FFA VALIDATION")
+    print("=========================================================================")
+
+    msname = os.path.join(
+        os.path.dirname(__file__),
+        "data",
+        "cracoData.LTR_1733-2344.SB77974.beam01.20251015072402.calG9.uvsub.ms",
+    )
+    start_time_idx = 100
+    end_time_idx = 700
+    npix_x, npix_y = 384, 384
+    pixsize_x = 22.0 / 206265.0
+    pixsize_y = 22.0 / 206265.0
+    epsilon = 1e-5
+    nthreads = 4
+
+    times, chan_freq, dt, vis_3d, wgt_3d, uvw_3d = load_chunk_data(
+        msname,
+        start_time_idx=start_time_idx,
+        end_time_idx=end_time_idx,
+        corr_mode="average",
+        average_correlations=True,
+    )
+    nbl, nchan, nt = vis_3d.shape
+
+    # Inject dispersed periodic pulsar at DM = 1000 pc/cm^3 and ~1.00 degree from phase centre:
+    # sqrt(130^2 + (-98)^2) * 22'' = 162.80 * 22'' = 3581.6'' = 0.995 deg (~1.00 deg)
+    dm_inj = 1000.0
+    p_inj = 2.00000
+    duty_cycle = 0.05
+    amp_inj = 0.45
+    dx_pix = +130
+    dy_pix = -98
+    target_x = npix_x // 2 + dx_pix
+    target_y = npix_y // 2 + dy_pix
+    dl = dx_pix * pixsize_x
+    dm_coord = dy_pix * pixsize_y
+    offset_deg = math.degrees(math.asin(math.hypot(dl, dm_coord)))
+    assert 0.98 <= offset_deg <= 1.02
+
+    K_DM = 4.148808e3 * 1e-6
+    f_ghz = chan_freq * 1e-9
+    ref_ghz = np.max(f_ghz)
+    delays_s = K_DM * dm_inj * (1.0 / f_ghz**2 - 1.0 / ref_ghz**2)
+    max_delay_s = float(np.max(delays_s))
+    max_delay_samp = int(np.round(max_delay_s / dt))
+
+    print(
+        f"Injected Pulsar: P={p_inj:.5f} s, DM={dm_inj:.1f} pc/cm^3 "
+        f"(max delay={max_delay_s:.2f} s = {max_delay_samp} samples), "
+        f"Offset={offset_deg:.3f} deg -> Target Pixel ({target_x}, {target_y})"
+    )
+
+    t_axis = np.arange(nt) * dt
+    c_light = 299792458.0
+
+    vis_injected = vis_3d.copy()
+    for c in range(nchan):
+        t_c = t_axis - delays_s[c]
+        phase_c = (t_c % p_inj) / p_inj
+        pulse_c = np.where(phase_c < duty_cycle, amp_inj, 0.0)
+
+        lam_c = c_light / chan_freq[c]
+        u_c = uvw_3d[:, 0, :] / lam_c
+        v_c = uvw_3d[:, 1, :] / lam_c
+        geom_phase_c = -2.0 * np.pi * (u_c * dl + v_c * dm_coord)
+
+        vis_injected[:, c, :] += (pulse_c[None, :] * np.exp(1j * geom_phase_c)).astype(np.complex64)
+
+    results = uv_ffa_streaming_search(
+        msname_or_data=(vis_injected, wgt_3d, uvw_3d, chan_freq, dt),
+        period_min=1.8,
+        period_max=2.2,
+        bins_min=16,
+        bins_max=24,
+        dm=dm_inj,
+        exact_uvw=True,
+        collapse_channels=False,
+        nx=npix_x,
+        ny=npix_y,
+        pixsize_x=pixsize_x,
+        pixsize_y=pixsize_y,
+        epsilon=epsilon,
+        threshold=1e-4,
+        nthreads=nthreads,
+        snr_thresh=8.0,
+        top_candidates=5,
+    )
+
+    candidates = results["candidates"]
+    assert len(candidates) > 0, "DM=1000, 1-deg off-axis pulsar was not detected in CRACO MS!"
+
+    top = candidates[0]
+    p_det = top["period"]
+    snr_det = top["snr"]
+    pix_det = top["peak_pixel"]
+    p_err = abs(p_det - p_inj) / p_inj * 100.0
+
+    print(f"Top Candidate (DM=1000, 1 deg off-axis):")
+    print(f"  Detected Period: {p_det:.5f} s (Injected: {p_inj:.5f} s, Error: {p_err:.3f}%)")
+    print(f"  Detection SNR:   {snr_det:.1f}")
+    print(f"  Detected Pixel:  {pix_det} (Expected: ({target_x}, {target_y}))")
+
+    assert p_err < 0.25, f"Period error {p_err:.3f}% exceeds tolerance 0.25%"
+    assert pix_det == (target_x, target_y), f"Pixel mismatch: {pix_det} vs ({target_x}, {target_y})"
+    assert snr_det > 50.0, f"Detection SNR {snr_det:.1f} is unexpectedly low"
+
+
 if __name__ == "__main__":
     test_craco_option_c_dedisp_streaming()
+    test_craco_high_dm_1000_1deg_offaxis_streaming()
