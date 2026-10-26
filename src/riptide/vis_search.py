@@ -130,7 +130,7 @@ def vis_ffa_search_basep(
         float(downsample_factor)
     )
 
-    foldbins = np.array([base_period for p in periods])
+    foldbins = np.full(len(periods), base_period, dtype=np.int64)
 
     ffa_result = UV_FFA_basep(uv_inds, periods, foldbins, base_period, tsamp, ffa_grid_array)
     return ffa_result
@@ -285,8 +285,8 @@ def baseline_ffa_search(
     bins_min=16,
     bins_max=64,
     dm=0.0,
-    collapse_channels=True,
-    exact_uvw=False,
+    collapse_channels=False,
+    exact_uvw=True,
     segment_duration_s=None,
     nx=384,
     ny=384,
@@ -310,13 +310,13 @@ def baseline_ffa_search(
         Dispersion measure in pc/cm^3.
     collapse_channels : bool
         If True, sum across channels before folding (standard mode).
-        If False, fold pseudo-baselines with exact wavelength coordinates.
+        If False (default), fold pseudo-baselines with exact wavelength coordinates.
     exact_uvw : bool
-        If True and collapse_channels is False, compute exact per-channel UVW delay tracks.
+        If True (default) and collapse_channels is False, compute exact per-channel UVW delay tracks.
     segment_duration_s : float, optional
-        Option A segment duration in seconds. If provided, partitions time series into
+        Stationary segment duration in seconds. If provided, partitions time series into
         segments where UV tracks are approximately stationary, then synthesizes across segments.
-        If None, runs Option B (direct baseline-folded imaging).
+        If None, runs full-observation baseline-folded imaging.
     nx, ny : int
         Output image dimensions.
     pixsize_x, pixsize_y : float
@@ -375,7 +375,7 @@ def uv_ffa_streaming_search(
 ):
     """
     Direct visibility streaming UV-domain FFA search.
-    Supports Option C exact visibility dedispersion and per-channel baseline migration tracking.
+    Supports exact wideband visibility dedispersion and per-channel baseline migration tracking.
     Streams dedispersed visibility timestamps into oversampled 2D UV grids via ducc0.wgridder.vis2grid,
     builds the Dynamic Grid Array (DGA) in memory without intermediate FITS cubes,
     executes the C++ Fast Folding Algorithm on each active UV cell, and reconstructs
@@ -392,11 +392,11 @@ def uv_ffa_streaming_search(
     dm : float
         Dispersion measure in pc/cm^3 (default: 0.0).
     exact_uvw : bool
-        If True (Option C), computes exact per-channel (u, v, w) delay tracks and dimensionless
+        If True, computes exact per-channel (u, v, w) delay tracks and dimensionless
         wavelength scaling, preserving maximum spatial frequency fidelity.
     collapse_channels : bool
         If True, collapses channels into 1 frequency before gridding.
-        If False (default for Option C), grids all pseudo-baselines with exact wavelength coordinates.
+        If False (default), grids all pseudo-baselines with exact wavelength coordinates.
     nx, ny : int
         Dirty image dimensions.
     pixsize_x, pixsize_y : float
@@ -421,7 +421,7 @@ def uv_ffa_streaming_search(
     from .time_series import VisTimeSeries
     from .ffautils import plan_ffa
 
-    # Option C Dedispersion & Exact UVW preparation
+    # Wideband Dedispersion & Exact UVW baseline migration preparation
     if isinstance(msname_or_data, (tuple, list)) and len(msname_or_data) >= 4:
         vis_raw = msname_or_data[0]
         if vis_raw.ndim == 3 and vis_raw.shape[1] > 1:
@@ -438,8 +438,9 @@ def uv_ffa_streaming_search(
                     dm=dm, collapse_channels=collapse_channels, exact_uvw=exact_uvw
                 )
                 msname_or_data = (vis_2d, wgt_2d, uvw_track, eff_freq, dt)
-            except ImportError:
-                pass
+            except ImportError as exc:
+                if dm != 0.0:
+                    raise ImportError("fastducc is required for wideband visibility dedispersion (dm != 0).") from exc
     elif isinstance(msname_or_data, str) and (dm != 0.0 or exact_uvw):
         try:
             from fastducc.imaging import load_chunk_data
@@ -458,8 +459,9 @@ def uv_ffa_streaming_search(
                 dm=dm, collapse_channels=collapse_channels, exact_uvw=exact_uvw
             )
             msname_or_data = (vis_2d, wgt_2d, uvw_track, eff_freq, dt)
-        except ImportError:
-            pass
+        except ImportError as exc:
+            if dm != 0.0:
+                raise ImportError("fastducc is required for wideband visibility dedispersion (dm != 0).") from exc
 
     # 1. Stream visibilities directly into VisTimeSeries
     vis_ts = VisTimeSeries.from_visibility_stream(
@@ -475,24 +477,31 @@ def uv_ffa_streaming_search(
     )
 
     dga = vis_ts.dga
+    if dga is None or dga.shape[0] == 0:
+        return {
+            "candidates": [],
+            "periods": np.array([], dtype=np.float64),
+            "snrs": np.array([], dtype=np.float32),
+            "vis_timeseries": vis_ts,
+        }
+
     nsamp = dga.shape[1]
     tsamp = vis_ts.tsamp
     unique_uv = vis_ts.unique_uv
     nu, nv = vis_ts.nu, vis_ts.nv
     cfu, cfv = vis_ts.cfu, vis_ts.cfv
 
-    # Precompute spatial coordinate maps and kernel correction factor
-    u = np.arange(nu)
-    xu = (-u) % nu
-    v = np.arange(nv)
-    xv = (-v) % nv
-    i_idx = np.arange(nx)
-    icfu = np.abs(nx // 2 - i_idx)
-    ix = (nu - nx // 2 + i_idx) % nu
-    j_idx = np.arange(ny)
-    icfv = np.abs(ny // 2 - j_idx)
-    jx = (nv - ny // 2 + j_idx) % nv
+    # Precompute sparse UV indices, conjugate Hartley indices, and 2D kernel correction factor
+    u_idx = unique_uv[:, 0]
+    v_idx = unique_uv[:, 1]
+    xu_idx = (-u_idx) % nu
+    xv_idx = (-v_idx) % nv
+
+    icfu = np.abs(nx // 2 - np.arange(nx))
+    icfv = np.abs(ny // 2 - np.arange(ny))
     cf_2d = (cfu[icfu, None] * cfv[None, icfv]).astype(np.float32)
+    hx, hy = nx // 2, ny // 2
+    rx, ry = nx - hx, ny - hy
 
     # 2. Plan FFA searches
     ffa_plans = plan_ffa(nsamp, tsamp, period_min, period_max, bins_min, bins_max)
@@ -505,13 +514,13 @@ def uv_ffa_streaming_search(
     for plan in ffa_plans:
         downsample_fac = plan["downsample_factor"]
         base_period = plan["base_period"]
-        bins = plan["bins"]
+        bins = int(plan["bins"])
         rows_eval = plan["rows_eval"]
         tau = plan["tau"]
 
         ffa_res = vis_ffa_search_basep(
             dynamic_grid_array=dga,
-            base_period=int(bins),
+            base_period=bins,
             uv_inds=unique_uv,
             tsamp=tau,
             rows_eval=rows_eval,
@@ -519,26 +528,29 @@ def uv_ffa_streaming_search(
         )
 
         ffa_arr = ffa_res.ffa_array  # (N_active_uv, N_periods, bins)
-        n_periods = ffa_arr.shape[1]
 
-        # Stream trial periods with minimal memory footprint (30 MB per period)
+        # Pre-allocate real Hartley grid and cropped dirty image cube per base period block
+        rgrid_cube = np.zeros((bins, nu, nv), dtype=np.float32)
+        dirty_cube = np.empty((bins, nx, ny), dtype=np.float32)
+
+        # Stream trial periods with direct sparse conjugate scatter into Hartley grid
         for ip, p_val in enumerate(ffa_res.periods):
-            grid_cand = np.zeros((bins, nu, nv), dtype=np.complex64)
-            grid_cand[:, unique_uv[:, 0], unique_uv[:, 1]] = ffa_arr[:, ip, :].T
+            vis_p = ffa_arr[:, ip, :].T  # (bins, M) complex64
+            rgrid_cube.fill(0.0)
+            rgrid_cube[:, u_idx, v_idx] = 0.5 * (vis_p.real - vis_p.imag)
+            rgrid_cube[:, xu_idx, xv_idx] += 0.5 * (vis_p.real + vis_p.imag)
 
-            # Construct Hermitian Hartley grid
-            rgrid_cube = 0.5 * (
-                grid_cand.real - grid_cand.imag +
-                grid_cand[:, xu[:, None], xv[None, :]].real +
-                grid_cand[:, xu[:, None], xv[None, :]].imag
-            ).astype(np.float32)
+            # 2D Fast Hartley Transform across spatial dimensions (-2, -1) in-place
+            ducc0.fft.genuine_fht(rgrid_cube, axes=(-2, -1), nthreads=nthreads, out=rgrid_cube)
 
-            # 2D Fast Hartley Transform across spatial dimensions (-2, -1)
-            im_full = ducc0.fft.genuine_fht(rgrid_cube, axes=(-2, -1), nthreads=nthreads)
-            dirty_cube = im_full[..., ix[:, None], jx[None, :]] * cf_2d  # (bins, nx, ny)
+            # Contiguous 4-quadrant fftshift crop and gridding kernel correction
+            dirty_cube[:, :hx, :hy] = rgrid_cube[:, nu - hx : nu, nv - hy : nv]
+            dirty_cube[:, :hx, hy:] = rgrid_cube[:, nu - hx : nu, :ry]
+            dirty_cube[:, hx:, :hy] = rgrid_cube[:, :rx, nv - hy : nv]
+            dirty_cube[:, hx:, hy:] = rgrid_cube[:, :rx, :ry]
+            dirty_cube *= cf_2d
 
-            # Robust pulse profile SNR per pixel across phase bins:
-            # Evaluates peak prominence above off-pulse noise floor (MAD)
+            # Robust pulse profile SNR per pixel across phase bins (off-pulse MAD)
             p_med = np.median(dirty_cube, axis=0)  # (nx, ny)
             p_mad = np.median(np.abs(dirty_cube - p_med[np.newaxis, :, :]), axis=0) * 1.4826 + 1e-12
             p_max = np.max(dirty_cube, axis=0)
@@ -556,12 +568,12 @@ def uv_ffa_streaming_search(
                     "period": float(p_val),
                     "snr": max_p_snr,
                     "base_period": float(base_period),
-                    "bins": int(bins),
+                    "bins": bins,
                     "best_bin": best_bin,
                     "peak_pixel": peak_pix,
-                    "image": dirty_cube[best_bin],
-                    "snr_image": snr_plane,
-                    "profile": dirty_cube[:, peak_pix[0], peak_pix[1]],
+                    "image": dirty_cube[best_bin].copy(),
+                    "snr_image": snr_plane.copy(),
+                    "profile": dirty_cube[:, peak_pix[0], peak_pix[1]].copy(),
                 })
 
     # Sort candidates by descending SNR

@@ -390,7 +390,7 @@ class Pipeline(object):
             df_clusters.to_csv(
                 df_clusters_fname, sep=",", index=False, float_format="%.9f"
             )
-            log.info("Saved Cluster data to {!r}".format(df_peaks_fname))
+            log.info("Saved Cluster data to {!r}".format(df_clusters_fname))
 
         ### CSV of basic candidate parameters
         if self.candidates:
@@ -527,29 +527,6 @@ class VisPipeline(object):
         if real_files is not None:
             log.debug("Input files: {}".format(len(real_files)))
         conf = self.config
-
-        #ignore DM for now
-        # # The DM iterator is in charge of:
-        # # - checking the time series
-        # # - selecting the DM trials in the right range with the right dynamic step
-        # # - yielding them in chunks of size = number of parallel processes
-        # self.dmiter = DMIterator(
-        #     files,
-        #     conf["dmselect"]["min"],
-        #     conf["dmselect"]["max"],
-        #     dmsinb_max=conf["dmselect"]["dmsinb_max"],
-        #     fmt=conf["data"]["format"],
-        #     wmin=self.wmin(),
-        #     fmin=conf["data"]["fmin"],
-        #     fmax=conf["data"]["fmax"],
-        #     nchans=conf["data"]["nchans"],
-        # )
-
-        # tsamp_max = self.dmiter.tsamp_max()
-        # log.info(
-        #     f"Max sampling time = {tsamp_max:.6e} s, checking pipeline config parameter values"
-        # )
-        # validate_ranges(conf["ranges"], tsamp_max)
 
         self.worker_pool = VisWorkerPool(
             conf["ranges"],
@@ -723,8 +700,7 @@ class VisPipeline(object):
             results = self.worker_pool.process_uvcells_test(real_file, imag_file)
             all_results.append(results)
         return all_results
-    
-     #blah blah do some changes
+
     @timing
     def search(self):
         """
@@ -929,7 +905,7 @@ class VisPipeline(object):
             df_clusters.to_csv(
                 df_clusters_fname, sep=",", index=False, float_format="%.9f"
             )
-            log.info("Saved Cluster data to {!r}".format(df_peaks_fname))
+            log.info("Saved Cluster data to {!r}".format(df_clusters_fname))
 
         ### CSV of basic candidate parameters
         if self.candidates:

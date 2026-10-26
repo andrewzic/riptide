@@ -182,14 +182,14 @@ class VisWorkerPool(object):
         return allpeaks
     
     def process_uvcells(self, real_fname, imag_fname):
-        print("here in process_uvcells", real_fname)
+        log.debug(f"Processing UV cells from {real_fname}")
         all_candidates = []
-        vis_ts = self.loader(real_fname, imag_fname) #this should be generalised
-        #get list of unique u, v pixel cell coords (indices)
+        vis_ts = self.loader(real_fname, imag_fname)
         vis_ts.get_sparse_unique_uv()
         
         nx = vis_ts.nu if vis_ts.nu is not None else vis_ts.header["NAXIS1"]
         ny = vis_ts.nv if vis_ts.nv is not None else vis_ts.header["NAXIS2"]
+        skycoords = vis_ts.sky_coords if hasattr(vis_ts, "sky_coords") and vis_ts.sky_coords is not None else None
 
         for conf in self.range_confs:
             kw_search = dict(conf["ffa_search"])
@@ -202,19 +202,16 @@ class VisWorkerPool(object):
                 ts, uv_ffa = vis_ffa_search(ts, uv_ind=uvcell, **kw_search)
                 uv_ffa_list.append(uv_ffa)
 
-            base_periods = uv_ffa_list[0].base_periods  #len(ffa_blocks) elements
-            tsamps = uv_ffa_list[0].tsamps #len(ffa_blocks) elements
-            # Step 2: figure out how many trial periods we have
             if not uv_ffa_list:
                 continue
+            base_periods = uv_ffa_list[0].base_periods
+            tsamps = uv_ffa_list[0].tsamps
             num_trials = len(uv_ffa_list[0].ffa_list)
 
             # Step 3: for each trial period index, gather all uvcell blocks and run vis_ffa_image_candidates
             uv_indices = [uv_ffa.uv_ind for uv_ffa in uv_ffa_list]
             for trial_idx in tqdm(range(num_trials)):
                 block_periods = uv_ffa_list[0].periods[trial_idx]
-                block_foldbins = uv_ffa_list[0].foldbins[trial_idx]
-
                 base_period = base_periods[trial_idx]
                 tsamp = tsamps[trial_idx]
                 ffa_blocks = [uv_ffa.ffa_list[trial_idx] for uv_ffa in uv_ffa_list]
@@ -229,16 +226,12 @@ class VisWorkerPool(object):
                     max_candidates_width=500,
                     max_candidates_all=10000,
                     ducy_max=0.95,
-                    wtsp=1.5, #width spacing
+                    wtsp=1.5,
                     mask_radius=2
                 )
-                print(f"found {len(trial_candidates)} cands") 
-                #conf["candidate_filters"]["snr_min"],                
-                #conf["candidate_filters"]["max_candidates"],
-                #conf["candidate_filters"]["max_candidates_all"],
+                log.debug(f"Found {len(trial_candidates)} candidates in trial {trial_idx}")
                 for cand in trial_candidates:
-                    # cand.x, cand.y are image pixel coords
-                    skycoord = sky_coords[cand.y, cand.x]  # lookup
+                    skycoord = skycoords[cand["y"], cand["x"]] if skycoords is not None else None
                     all_candidates.append({
                         "trial_idx": trial_idx,
                         "base_period": base_period,
@@ -248,8 +241,8 @@ class VisWorkerPool(object):
                         "snr": cand["snr"],
                         "period": cand["period"],
                         "width_bins": cand["width"],
-                        "ra_deg": skycoord.ra.deg,
-                        "dec_deg": skycoord.dec.deg,
+                        "ra_deg": skycoord.ra.deg if skycoord is not None else None,
+                        "dec_deg": skycoord.dec.deg if skycoord is not None else None,
                         "skycoord": skycoord
                     })
         df_candidates = pd.DataFrame(all_candidates)
@@ -257,14 +250,11 @@ class VisWorkerPool(object):
         return df_candidates
     
     def process_uvcells_basep(self, real_fname, imag_fname):
-        print("here in process_uvcells", real_fname)
+        log.debug(f"Processing UV cells (basep) from {real_fname}")
         all_candidates = []
         
-        #load in the data all in one blob
-        # this is horrible on i/o and RAM
-        vis_ts = self.loader(real_fname, imag_fname) #this should be generalised
-        #vis_ts should be a sparse.COO cube
-        print("loaded data cube")
+        vis_ts = self.loader(real_fname, imag_fname)
+        log.debug("Loaded visibility data cube")
 
         #get list of unique u, v pixel cell coords (for all nonzero u,v pixels)
         vis_ts.get_sparse_unique_uv()
@@ -280,12 +270,8 @@ class VisWorkerPool(object):
         #perform one-off computation to densify the sparse cube
         #this deletes vis_ts.data
         vis_ts.make_dynamic_grid_array()
-        # the result is a 2D numpy array for every nonzero (u,v) pixel in the 3D cube
-        # each row of the 2D array has a filled time series of size nsamp
-        print("made DGA")
+        log.debug(f"Constructed DGA (memory usage: {vis_ts.dga.nbytes} bytes)")
         dense_uv_ts = vis_ts.dga
-        
-        print(f"DGA memory usage: {vis_ts.dga.nbytes}")
         
         trial_idx_ctr = 0
 
@@ -300,26 +286,16 @@ class VisWorkerPool(object):
             bins_max = kw_search["bins_max"]  
             wtsp = kw_search["wtsp"]
             
-            #plan out the FFA - base periods, etc given the input period min, max, bins min, max, tsamp, etc
             ffa_plans = plan_ffa(nsamp, tsamp, period_min, period_max, bins_min, bins_max)      
-            # ffa_plan : list of dict
-            # Each dict contains:
-            #     - 'downsample_factor'
-            #     - 'tau' (effective sample time)
-            #     - 'bins'
-            #     - 'base_period' (tau*bins)
-            #     - 'rows_eval' (rows used in FFA transform)    
             
             for ffa_plan in ffa_plans:
                 downsample_fac = ffa_plan["downsample_factor"]
                 tau = ffa_plan["tau"]
-                base_period = ffa_plan["base_period"] #need to make sure this is int bins, not real base period [s]
-                print(base_period)
-                bins = ffa_plan["bins"] #this is what we should pass downstream for base folding period... I think
+                base_period = ffa_plan["base_period"]
+                bins = ffa_plan["bins"]
                 rows_eval = ffa_plan["rows_eval"]
 
-                # MAJOR Step 1: run vis_ffa_search for each UV cell
-                print(f"doing FFA transform on {vis_ts.unique_uv.shape} cells with base period {bins}, corresponding to {base_period} s. ")
+                log.debug(f"Running FFA transform on {vis_ts.unique_uv.shape} cells with base period {bins} bins ({base_period} s)")
                 uv_ffa = vis_ffa_search_basep(
                     dense_uv_ts,
                     bins,
@@ -332,8 +308,6 @@ class VisWorkerPool(object):
                 # gather up results
                 ffa_cube = uv_ffa.ffa_array
                 block_periods = uv_ffa.periods
-                block_foldbins = uv_ffa.foldbins
-
                 base_period = uv_ffa.base_periods
                 tsamp_eff = uv_ffa.tsamps
 
@@ -348,10 +322,10 @@ class VisWorkerPool(object):
                     max_candidates_width=500,
                     max_candidates_all=10000,
                     ducy_max=0.5,
-                    wtsp=wtsp, #width spacing
+                    wtsp=wtsp,
                     mask_radius=2
                 )
-                print(f"found {len(trial_candidates)} cands") 
+                log.debug(f"Found {len(trial_candidates)} candidates") 
 
                 # gather candidates and add info to dataframe dict
                 for cand in trial_candidates:
@@ -579,23 +553,17 @@ class VisWorkerPool(object):
         return df
         
     def process_uvcells_test(self, real_fname, imag_fname):
-        print("here in process_uvcells", real_fname)
+        log.debug(f"Processing UV cells (test) from {real_fname}")
         all_candidates = []
-        vis_ts = self.loader(real_fname, imag_fname) #this should be generalised
-        #get list of unique u, v pixel cell coords (indices)
+        vis_ts = self.loader(real_fname, imag_fname)
         vis_ts.get_sparse_unique_uv()
         
         nx = vis_ts.nu if vis_ts.nu is not None else vis_ts.header["NAXIS1"]
         ny = vis_ts.nv if vis_ts.nv is not None else vis_ts.header["NAXIS2"]
         nsamp = vis_ts.nsamp
         tsamp = vis_ts.tsamp
-        print(vis_ts.data.shape, "vis ts shape")
-        #one-off computation to densify the sparse cube
         vis_ts.make_dynamic_grid_array()
-        print("made DGA")
         dense_uv_ts = vis_ts.dga
-
-        print("dga shape:", dense_uv_ts.shape)
 
         for conf in self.range_confs:
             kw_search = dict(conf["ffa_search"])
@@ -612,11 +580,10 @@ class VisWorkerPool(object):
                 downsample_fac = ffa_plan["downsample_factor"]
                 tau = ffa_plan["tau"]
                 base_period = ffa_plan["base_period"]
-                print(base_period)
                 bins = ffa_plan["bins"]
                 rows_eval = ffa_plan["rows_eval"]
 
-                print(f"doing FFA transform on {vis_ts.unique_uv.shape} cells with base period {base_period}")
+                log.debug(f"Running FFA transform on {vis_ts.unique_uv.shape} cells with base period {base_period}")
                 uv_ffa = vis_ffa_search_basep(
                     dense_uv_ts,
                     bins,
@@ -628,9 +595,6 @@ class VisWorkerPool(object):
 
                 ffa_cube = uv_ffa.ffa_array
                 periods = uv_ffa.periods
-
-                print(vis_ts.unique_uv.shape)
-                print(ffa_cube.shape)
                 
                 img_dict = test_vis_ffa_image_imgs(
                     ffa_cube,

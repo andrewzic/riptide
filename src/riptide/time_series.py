@@ -460,30 +460,32 @@ class VisTimeSeries(object):
     TimeSeries.generate : Generate a noisy time series containing a fake pulsar signal
     """
 
-    def __init__(self, data, tsamp, metadata=None, copy=False, nu=None, nv=None, du=None, dv=None, phase_centre=None, dtype=None, header=None):
-        if copy:
+    def __init__(self, data, tsamp, metadata=None, copy=False, nu=None, nv=None, du=None, dv=None, phase_centre=None, dtype=None, header=None, dga=None, unique_uv=None):
+        if data is None:
+            self._data = None
+        elif copy:
             self._data = np.ascontiguousarray(data, dtype=np.complex64).copy()
         elif sparse is not None and isinstance(data, sparse.COO):
             self._data = data
         else:
             self._data = np.ascontiguousarray(data, dtype=np.complex64)
+        self.dga = dga
+        self.unique_uv = unique_uv
         self._tsamp = float(tsamp)
         self.metadata = Metadata(metadata) if metadata is not None else Metadata({})
 
         # Carrying a tobs attribute is quite practical in later stages of
         # the pipeline (peak detection in periodograms)
         self.metadata["tobs"] = self.length
-        if dtype is None:
-            self.dtype = np.complex64
+        self.dtype = np.complex64 if dtype is None else dtype
         self.nu = nu
         self.nv = nv
         self.du = du
         self.dv = dv
         if phase_centre is None:
-            self.phase_centre = None #
+            self.phase_centre = None
         else:
             self.phase_centre = SkyCoord(phase_centre[0]*u.deg, phase_centre[1]*u.deg, frame="icrs") if isinstance(phase_centre, tuple) else phase_centre
-        self.unique_uv = None
         self.header = header
 
     @property
@@ -541,9 +543,6 @@ class VisTimeSeries(object):
         self.dv = dv
 
     def set_phase_centre(self, ra_deg, dec_deg):
-
-        #phase_centre: tuple with ra_deg, dec_deg
-        print(ra_deg, dec_deg)
         self.phase_centre = SkyCoord(ra_deg*u.deg, dec_deg*u.deg, frame="icrs")
 
     def set_header(self, header):
@@ -588,7 +587,6 @@ class VisTimeSeries(object):
         l = (np.arange(nx) - nx // 2) * delta_l
         m = (np.arange(ny) - ny // 2) * delta_m
         l_grid, m_grid = np.meshgrid(l, m)  # shape (ny, nx)
-        print(l_grid)
         
         # Convert to astropy Quantity (radians)
         l_offsets = l_grid * u.rad
@@ -628,7 +626,7 @@ class VisTimeSeries(object):
         if inplace:
             self._data = (self.data - m) / norm
         else:
-            return TimeSeries(
+            return VisTimeSeries(
                 (self.data - m) / norm, self.tsamp, metadata=self.metadata
             )
 
@@ -661,7 +659,7 @@ class VisTimeSeries(object):
         if inplace:
             self._data -= rmed
         else:
-            return TimeSeries(self.data - rmed, self.tsamp, metadata=self.metadata)
+            return VisTimeSeries(self.data - rmed, self.tsamp, metadata=self.metadata)
 
     def downsample(self, factor, inplace=False):
         """Downsample data by a real-valued factor, by grouping and adding
@@ -791,8 +789,6 @@ class VisTimeSeries(object):
                     tsamp = float(header[f"CDELT{fits_idx}"])
                 except (ValueError, KeyError):
                     tsamp = 0.110
-            print(real_hdul[0])
-            print(real_hdul[0].data.shape)
             real_data = np.nan_to_num(real_hdul[0].data.squeeze(), nan=0.0, posinf=0.0, neginf=0.0)
             imag_data = np.nan_to_num(imag_hdul[0].data.squeeze(), nan=0.0, posinf=0.0, neginf=0.0)
 
@@ -812,7 +808,6 @@ class VisTimeSeries(object):
         Load only a chunk of the cube along (u, v) dimensions.
         If u_slice or v_slice are None, take the full range in that dimension.
         """
-        print(f"in here with {u_slice.start if u_slice else 0}, {u_slice.stop if u_slice else None}; {v_slice.start if v_slice else 0}, {v_slice.stop if v_slice else None}")
         with fits.open(real_cube_file, memmap=True) as real_hdul, fits.open(imag_cube_file, memmap=True) as imag_hdul:
 
             header = real_hdul[0].header
@@ -838,12 +833,10 @@ class VisTimeSeries(object):
 
             raw = real_data + 1j * imag_data
             # Squeeze only leading singleton axes (e.g. STOKES, FREQ), preserving (Nt, chunk_v, chunk_u)
-            squeeze_axes = tuple(i for i in range(raw.ndim - 2) if raw.shape[i] == 1 and raw.ndim - len([j for j in range(raw.ndim - 2) if raw.shape[j] == 1]) >= 3)
             if raw.ndim > 3:
                 data = raw.reshape(-1, raw.shape[-2], raw.shape[-1])
             else:
                 data = raw
-            print(f"size of data is {data.nbytes}")
 
             # Apply threshold
             if sparse is not None:
@@ -902,58 +895,74 @@ class VisTimeSeries(object):
         """
         import ducc0
 
-        # 1. Parse input
+        # 1. If MS path is provided, load into 3D arrays in a single pass
         if isinstance(msname_or_data, str):
             try:
-                from casacore.tables import table
-            except ImportError:
-                raise ImportError("casacore is required to stream from a Measurement Set.")
-            with table(msname_or_data, readonly=True, ack=False) as t_main:
-                with table(f"{msname_or_data}/SPECTRAL_WINDOW", readonly=True, ack=False) as t_spw:
-                    chan_freq = np.asarray(t_spw.getcol("CHAN_FREQ")[0], dtype=np.float64)
-                times = t_main.getcol("TIME")
-                unique_times = np.unique(times)
-                if start_time_idx is not None or end_time_idx is not None:
-                    unique_times = unique_times[slice(start_time_idx, end_time_idx)]
-                nt = len(unique_times)
-                dt = float(np.median(np.diff(unique_times))) if nt > 1 else 0.110
-
-                t0_sub = t_main.query(f"TIME == {unique_times[0]}")
-                uvw_0 = np.asarray(t0_sub.getcol("UVW"), dtype=np.float64)
-                vis_0 = np.asarray(t0_sub.getcol("DATA"), dtype=np.complex64)
-                if vis_0.ndim == 3 and vis_0.shape[-1] > 1:
-                    vis_0 = np.mean(vis_0, axis=-1)
-                t0_sub.close()
-
-                grid_0, cfu, cfv = ducc0.wgridder.vis2grid(
-                    uvw=uvw_0, freq=chan_freq, vis=vis_0,
-                    npix_x=npix_x, npix_y=npix_y,
-                    pixsize_x=pixsize_x, pixsize_y=pixsize_y,
-                    epsilon=epsilon, nthreads=nthreads,
-                    sigma_min=sigma_min, sigma_max=sigma_max,
-                    return_corfunc=True
+                from fastducc.imaging import load_chunk_data
+                _, chan_freq, dt, vis_3d, wgt_3d, uvw_3d = load_chunk_data(
+                    msname_or_data,
+                    start_time_idx=start_time_idx,
+                    end_time_idx=end_time_idx,
+                    corr_mode="average",
+                    average_correlations=True,
                 )
-                nu, nv = grid_0.shape
+            except ImportError:
+                try:
+                    from casacore.tables import table
+                except ImportError:
+                    raise ImportError("casacore is required to stream from a Measurement Set.")
+                with table(msname_or_data, readonly=True, ack=False) as t_main:
+                    with table(f"{msname_or_data}/SPECTRAL_WINDOW", readonly=True, ack=False) as t_spw:
+                        chan_freq = np.asarray(t_spw.getcol("CHAN_FREQ")[0], dtype=np.float64)
+                    colnames = set(t_main.colnames())
+                    time_col = "TIME_CENTROID" if "TIME_CENTROID" in colnames else "TIME"
+                    all_times = t_main.getcol(time_col)
+                    unique_times = np.unique(all_times)
+                    if start_time_idx is not None or end_time_idx is not None:
+                        s_idx = 0 if start_time_idx is None else int(start_time_idx)
+                        e_idx = len(unique_times) if end_time_idx is None else int(end_time_idx) + 1
+                        unique_times = unique_times[s_idx:e_idx]
+                        t_sub = t_main.query(f"{time_col} >= {unique_times[0]:.17g} AND {time_col} <= {unique_times[-1]:.17g}")
+                    else:
+                        t_sub = t_main
+                    try:
+                        time_vals = t_sub.getcol(time_col)
+                        a1 = t_sub.getcol("ANTENNA1")
+                        a2 = t_sub.getcol("ANTENNA2")
+                        uvw_all = np.asarray(t_sub.getcol("UVW"), dtype=np.float64)
+                        data_all = np.asarray(t_sub.getcol("DATA"), dtype=np.complex64)
+                        flags_all = np.asarray(t_sub.getcol("FLAG"), dtype=bool)
+                    finally:
+                        if t_sub is not t_main:
+                            t_sub.close()
 
-                uv_cube = np.zeros((nt, nu, nv), dtype=np.complex64)
-                uv_cube[0] = grid_0
-                grid_buf = np.zeros((nu, nv), dtype=np.complex64)
-                for it, t_val in enumerate(unique_times[1:], start=1):
-                    t_sub = t_main.query(f"TIME == {t_val}")
-                    uvw_t = np.asarray(t_sub.getcol("UVW"), dtype=np.float64)
-                    vis_t = np.asarray(t_sub.getcol("DATA"), dtype=np.complex64)
-                    if vis_t.ndim == 3 and vis_t.shape[-1] > 1:
-                        vis_t = np.mean(vis_t, axis=-1)
-                    t_sub.close()
-                    ducc0.wgridder.vis2grid(
-                        uvw=uvw_t, freq=chan_freq, vis=vis_t,
-                        npix_x=npix_x, npix_y=npix_y,
-                        pixsize_x=pixsize_x, pixsize_y=pixsize_y,
-                        epsilon=epsilon, nthreads=nthreads,
-                        sigma_min=sigma_min, sigma_max=sigma_max,
-                        grid=grid_buf
-                    )
-                    uv_cube[it] = grid_buf
+                good = ~flags_all
+                if data_all.ndim == 3 and data_all.shape[-1] > 1:
+                    # Average unflagged parallel/available correlations
+                    wgt_all = good.astype(np.float32)
+                    wsum = wgt_all.sum(axis=-1)
+                    with np.errstate(invalid="ignore", divide="ignore"):
+                        vis_flat = (data_all * wgt_all).sum(axis=-1) / np.where(wsum > 0, wsum, np.nan)
+                    vis_flat = np.nan_to_num(vis_flat, nan=0.0).astype(np.complex64)
+                    wgt_flat = wsum
+                else:
+                    vis_flat = data_all.squeeze(-1) if data_all.ndim == 3 else data_all
+                    wgt_flat = good.squeeze(-1).astype(np.float32) if good.ndim == 3 else good.astype(np.float32)
+
+                bl_keys = (a1.astype(np.int64) << 32) | a2.astype(np.int64)
+                u_bls, bl_inv = np.unique(bl_keys, return_inverse=True)
+                u_times, time_inv = np.unique(time_vals, return_inverse=True)
+                nbl = len(u_bls)
+                nt = len(u_times)
+                nchan = len(chan_freq)
+                dt = float(np.median(np.diff(u_times))) if nt > 1 else 0.110
+
+                vis_3d = np.zeros((nbl, nchan, nt), dtype=np.complex64)
+                wgt_3d = np.zeros((nbl, nchan, nt), dtype=np.float32)
+                uvw_3d = np.zeros((nbl, 3, nt), dtype=np.float64)
+                vis_3d[bl_inv, :, time_inv] = vis_flat
+                wgt_3d[bl_inv, :, time_inv] = wgt_flat
+                uvw_3d[bl_inv, :, time_inv] = uvw_all
         elif isinstance(msname_or_data, (tuple, list)):
             if len(msname_or_data) == 5:
                 vis_3d, wgt_3d, uvw_3d, chan_freq, dt = msname_or_data
@@ -962,62 +971,86 @@ class VisTimeSeries(object):
                 wgt_3d = None
             else:
                 raise ValueError("Tuple input must be (vis, uvw, chan_freq, dt) or (vis, wgt, uvw, chan_freq, dt)")
+        else:
+            raise TypeError("Unsupported msname_or_data type: must be MS path or tuple.")
 
-            if vis_3d.ndim == 2:
-                vis_3d = vis_3d[:, np.newaxis, :]
-            if wgt_3d is not None and wgt_3d.ndim == 2:
-                wgt_3d = wgt_3d[:, np.newaxis, :]
-            nbl, nchan, nt = vis_3d.shape
-            chan_freq = np.asarray(chan_freq, dtype=np.float64)
+        if vis_3d.ndim == 2:
+            vis_3d = vis_3d[:, np.newaxis, :]
+        if wgt_3d is not None and wgt_3d.ndim == 2:
+            wgt_3d = wgt_3d[:, np.newaxis, :]
+        nbl, nchan, nt = vis_3d.shape
+        chan_freq = np.asarray(chan_freq, dtype=np.float64)
 
-            uvw_0 = uvw_3d[..., 0] if uvw_3d.ndim == 3 else uvw_3d
-            vis_0 = vis_3d[..., 0]
-            wgt_0 = wgt_3d[..., 0] if wgt_3d is not None else None
+        uvw_0 = uvw_3d[..., 0] if uvw_3d.ndim == 3 else uvw_3d
+        vis_0 = vis_3d[..., 0]
+        wgt_0 = wgt_3d[..., 0] if wgt_3d is not None else None
 
-            grid_0, cfu, cfv = ducc0.wgridder.vis2grid(
-                uvw=uvw_0, freq=chan_freq, vis=vis_0, wgt=wgt_0,
+        grid_0, cfu, cfv = ducc0.wgridder.vis2grid(
+            uvw=uvw_0, freq=chan_freq, vis=vis_0, wgt=wgt_0,
+            npix_x=npix_x, npix_y=npix_y,
+            pixsize_x=pixsize_x, pixsize_y=pixsize_y,
+            epsilon=epsilon, nthreads=nthreads,
+            sigma_min=sigma_min, sigma_max=sigma_max,
+            return_corfunc=True
+        )
+        nu, nv = grid_0.shape
+
+        uv_cube = np.zeros((nt, nu, nv), dtype=np.complex64)
+        uv_cube[0] = grid_0
+        grid_buf = np.zeros((nu, nv), dtype=np.complex64)
+
+        for it in range(1, nt):
+            uvw_t = uvw_3d[..., it] if uvw_3d.ndim == 3 else uvw_3d
+            vis_t = vis_3d[..., it]
+            wgt_t = wgt_3d[..., it] if wgt_3d is not None else None
+            if wgt_t is not None and np.count_nonzero(wgt_t) == 0:
+                uv_cube[it] = 0.0
+                continue
+            ducc0.wgridder.vis2grid(
+                uvw=uvw_t, freq=chan_freq, vis=vis_t, wgt=wgt_t,
                 npix_x=npix_x, npix_y=npix_y,
                 pixsize_x=pixsize_x, pixsize_y=pixsize_y,
                 epsilon=epsilon, nthreads=nthreads,
                 sigma_min=sigma_min, sigma_max=sigma_max,
-                return_corfunc=True
+                grid=grid_buf
             )
-            nu, nv = grid_0.shape
-
-            uv_cube = np.zeros((nt, nu, nv), dtype=np.complex64)
-            uv_cube[0] = grid_0
-            grid_buf = np.zeros((nu, nv), dtype=np.complex64)
-
-            for it in range(1, nt):
-                uvw_t = uvw_3d[..., it] if uvw_3d.ndim == 3 else uvw_3d
-                vis_t = vis_3d[..., it]
-                wgt_t = wgt_3d[..., it] if wgt_3d is not None else None
-                ducc0.wgridder.vis2grid(
-                    uvw=uvw_t, freq=chan_freq, vis=vis_t, wgt=wgt_t,
-                    npix_x=npix_x, npix_y=npix_y,
-                    pixsize_x=pixsize_x, pixsize_y=pixsize_y,
-                    epsilon=epsilon, nthreads=nthreads,
-                    sigma_min=sigma_min, sigma_max=sigma_max,
-                    grid=grid_buf
-                )
-                uv_cube[it] = grid_buf
-        else:
-            raise TypeError("Unsupported msname_or_data type: must be MS path or tuple.")
+            uv_cube[it] = grid_buf
 
         du = 1.0 / (nu * pixsize_x)
         dv = 1.0 / (nv * pixsize_y)
 
-        if threshold > 0 and sparse is not None:
-            grid_data = sparse.COO(np.where(np.abs(uv_cube) > threshold, uv_cube, 0))
-        elif threshold > 0:
-            grid_data = np.where(np.abs(uv_cube) > threshold, uv_cube, 0).astype(np.complex64)
-        else:
-            grid_data = uv_cube
+        if direct_dga:
+            # Extract active UV cell time series directly without constructing a 3D sparse.COO object
+            if threshold > 0:
+                uv_mask = (np.abs(uv_cube) > threshold).any(axis=0)
+            else:
+                uv_mask = (uv_cube != 0).any(axis=0)
+            u_coords, v_coords = np.nonzero(uv_mask)
+            unique_uv = np.column_stack([u_coords, v_coords])
+            sub = uv_cube[:, u_coords, v_coords]
+            if threshold > 0:
+                sub = np.where(np.abs(sub) > threshold, sub, 0)
+            dga = np.ascontiguousarray(sub.T, dtype=np.complex64)
+            del uv_cube, sub
 
-        obj = cls(
-            grid_data, tsamp=dt, dtype=np.complex64,
-            nu=nu, nv=nv, du=du, dv=dv, phase_centre=phase_centre
-        )
+            obj = cls(
+                None, tsamp=dt, dtype=np.complex64,
+                nu=nu, nv=nv, du=du, dv=dv, phase_centre=phase_centre,
+                dga=dga, unique_uv=unique_uv
+            )
+        else:
+            if threshold > 0 and sparse is not None:
+                grid_data = sparse.COO(np.where(np.abs(uv_cube) > threshold, uv_cube, 0))
+            elif threshold > 0:
+                grid_data = np.where(np.abs(uv_cube) > threshold, uv_cube, 0).astype(np.complex64)
+            else:
+                grid_data = uv_cube
+
+            obj = cls(
+                grid_data, tsamp=dt, dtype=np.complex64,
+                nu=nu, nv=nv, du=du, dv=dv, phase_centre=phase_centre
+            )
+
         obj.cfu = cfu
         obj.cfv = cfv
         obj.npix_x = npix_x
@@ -1025,78 +1058,7 @@ class VisTimeSeries(object):
         obj.pixsize_x = pixsize_x
         obj.pixsize_y = pixsize_y
 
-        if direct_dga:
-            obj.make_dynamic_grid_array()
-
         return obj
-    
-    # @classmethod
-    # def from_real_imag_cube_chunked(cls, real_cube_file, imag_cube_file,
-    #                                 threshold=3e-3, chunk_size=64):
-    #     """
-    #     Chunked loader for large visibility cubes.
-    #     - Leaves time dimension intact
-    #     - Chunks along last 2 axes (u,v)
-    #     - Builds a sparse cube lazily with dask
-
-    #     Parameters
-    #     ----------
-    #     real_cube_file : str
-    #         Path to FITS file containing real part of visibilities
-    #     imag_cube_file : str
-    #         Path to FITS file containing imaginary part of visibilities
-    #     threshold : float
-    #         Absolute value threshold below which values are set to zero
-    #     chunk_size : int
-    #         Spatial chunk size along u,v dimensions
-
-    #     Returns
-    #     -------
-    #     VisTimeSeries
-    #         Instance with dask-backed sparse data cube
-    #     """
-    #     # Open headers
-    #     with fits.open(real_cube_file, memmap=True) as real_hdul:
-    #         header = real_hdul[0].header
-    #         wcs = WCS(header)
-
-    #     nu = header["NAXIS1"]
-    #     nv = header["NAXIS2"]
-    #     fits_idx = wcs.axis_type_names.index("TIME") + 1
-    #     tsamp = float(header[f"CDELT{fits_idx}"])
-    #     du = header["CDELT1"]
-    #     dv = header["CDELT2"]
-
-    #     # Open lazily with dask
-    #     real_darr = da.from_array(
-    #         fits.getdata(real_cube_file, memmap=True),
-    #         chunks=(-1, chunk_size, chunk_size)  # keep time axis whole
-    #     )
-    #     imag_darr = da.from_array(
-    #         fits.getdata(imag_cube_file, memmap=True),
-    #         chunks=(-1, chunk_size, chunk_size)
-    #     )
-
-    #     darr = real_darr + 1j * imag_darr
-
-    #     # Threshold lazily
-    #     darr = da.where(da.abs(darr) > threshold, darr, 0.0)
-
-    #     # At this stage darr is (time, v, u) with dask backing
-    #     # Convert to sparse for efficient indexing
-    #     # NOTE: keep as dask.array until densification step
-    #     sparse_grid = sparse.from_numpy(darr.compute())  # or wrap lazy later
-
-    #     return cls(
-    #         sparse_grid,
-    #         tsamp,
-    #         dtype=sparse_grid.dtype,
-    #         nu=nu,
-    #         nv=nv,
-    #         du=du,
-    #         dv=dv,
-    #         header=header
-    #     )
 
     @classmethod
     def from_img_cube(cls, cube_file):

@@ -1,3 +1,4 @@
+import os
 import time
 import math
 import numpy as np
@@ -12,10 +13,14 @@ from riptide.vis_search import uv_ffa_streaming_search
 
 def test_craco_option_c_dedisp_streaming():
     print("=========================================================================")
-    print("OPTION C VALIDATION: EXACT UVW TRACKING & DEDISPERSION STREAMING UV-FFA")
+    print("VALIDATION: EXACT UVW TRACKING & DEDISPERSION STREAMING UV-FFA")
     print("=========================================================================")
 
-    msname = "tests/data/cracoData.LTR_1733-2344.SB77974.beam01.20251015072402.calG9.uvsub.ms"
+    msname = os.path.join(
+        os.path.dirname(__file__),
+        "data",
+        "cracoData.LTR_1733-2344.SB77974.beam01.20251015072402.calG9.uvsub.ms",
+    )
     start_time_idx = 100
     end_time_idx = 700
     npix_x, npix_y = 384, 384
@@ -152,7 +157,7 @@ def test_craco_option_c_dedisp_streaming():
     assert snr_det > 50.0, f"Detection SNR {snr_det:.1f} is unexpectedly low"
 
     # 5. Diagnostic Plotting (4-Panel View)
-    plot_file = "craco_option_c_dedisp_candidate.png"
+    plot_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "craco_option_c_dedisp_candidate.png")
     fig, axes = plt.subplots(1, 4, figsize=(22, 5))
 
     # Panel 1: Full-field dirty image with non-obstructing open target ring
