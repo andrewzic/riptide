@@ -146,17 +146,17 @@ def test_streaming_uv_ffa_high_dm_1deg_offaxis():
         f"(max delay={np.max(delays_s):.2f} s), Offset={offset_deg:.3f} deg -> Pixel {expected_peak}"
     )
 
-    # Synthesize baseline UVW tracks with Earth-rotation drift
+    # Synthesize baseline UVW tracks with non-coplanar W and Earth-rotation drift
     uvw_0 = (np.random.rand(nbaselines, 3) - 0.5) * 1800.0
-    uvw_0[:, 2] = 0.0
     theta = np.linspace(0.0, 0.015, ntimes)
     cos_t = np.cos(theta)
     sin_t = np.sin(theta)
     uvw_3d = np.zeros((nbaselines, 3, ntimes), dtype=np.float64)
     uvw_3d[:, 0, :] = uvw_0[:, 0, None] * cos_t[None, :] - uvw_0[:, 1, None] * sin_t[None, :]
     uvw_3d[:, 1, :] = uvw_0[:, 0, None] * sin_t[None, :] + uvw_0[:, 1, None] * cos_t[None, :]
+    uvw_3d[:, 2, :] = uvw_0[:, 2, None] * cos_t[None, :] + 0.1 * uvw_0[:, 0, None] * sin_t[None, :]
 
-    # Generate dispersed wideband visibilities
+    # Generate dispersed wideband visibilities with full 3D non-coplanar phase
     t_axis = np.arange(ntimes) * tsamp
     noise_sigma = 0.35
     vis_3d = (
@@ -165,6 +165,7 @@ def test_streaming_uv_ffa_high_dm_1deg_offaxis():
     ).astype(np.complex64)
     wgt_3d = np.ones((nbaselines, nchan, ntimes), dtype=np.float32)
 
+    nm1 = np.sqrt(max(0.0, 1.0 - delta_l**2 - delta_m**2)) - 1.0
     source_flux = 4.0
     for ic in range(nchan):
         t_emit = t_axis - delays_s[ic]
@@ -174,10 +175,11 @@ def test_streaming_uv_ffa_high_dm_1deg_offaxis():
         inv_lam = chan_freq[ic] / c
         u_lam = uvw_3d[:, 0, :] * inv_lam
         v_lam = uvw_3d[:, 1, :] * inv_lam
-        geom_phase = -2.0 * np.pi * (u_lam * delta_l + v_lam * delta_m)
+        w_lam = uvw_3d[:, 2, :] * inv_lam
+        geom_phase = -2.0 * np.pi * (u_lam * delta_l + v_lam * delta_m - w_lam * nm1)
         vis_3d[:, ic, :] += (pulse_c[None, :] * np.exp(1j * geom_phase)).astype(np.complex64)
 
-    # 1. Search with exact per-channel UVW tracking & dedispersion at DM = 1000
+    # 1. Search with exact per-channel UVW tracking, W-gridding & dedispersion at DM = 1000
     results = uv_ffa_streaming_search(
         msname_or_data=(vis_3d, wgt_3d, uvw_3d, chan_freq, tsamp),
         period_min=1.8,
@@ -192,6 +194,7 @@ def test_streaming_uv_ffa_high_dm_1deg_offaxis():
         pixsize_x=pixsize_x,
         pixsize_y=pixsize_y,
         epsilon=1e-5,
+        do_wgridding=True,
         snr_thresh=8.0,
         nthreads=4,
     )

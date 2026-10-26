@@ -367,6 +367,7 @@ def uv_ffa_streaming_search(
     pixsize_x=22.0 / 206265.0,
     pixsize_y=22.0 / 206265.0,
     epsilon=1e-5,
+    do_wgridding=True,
     threshold=1e-4,
     nthreads=1,
     snr_thresh=6.0,
@@ -471,6 +472,7 @@ def uv_ffa_streaming_search(
         pixsize_x=pixsize_x,
         pixsize_y=pixsize_y,
         epsilon=epsilon,
+        do_wgridding=do_wgridding,
         threshold=threshold,
         nthreads=nthreads,
         direct_dga=True

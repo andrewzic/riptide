@@ -858,6 +858,7 @@ class VisTimeSeries(object):
         pixsize_x=22.0 / 206265.0,
         pixsize_y=22.0 / 206265.0,
         epsilon=1e-5,
+        do_wgridding=True,
         threshold=1e-4,
         nthreads=1,
         sigma_min=1.1,
@@ -989,7 +990,7 @@ class VisTimeSeries(object):
             uvw=uvw_0, freq=chan_freq, vis=vis_0, wgt=wgt_0,
             npix_x=npix_x, npix_y=npix_y,
             pixsize_x=pixsize_x, pixsize_y=pixsize_y,
-            epsilon=epsilon, nthreads=nthreads,
+            epsilon=epsilon, do_wgridding=do_wgridding, nthreads=nthreads,
             sigma_min=sigma_min, sigma_max=sigma_max,
             return_corfunc=True
         )
@@ -1010,7 +1011,7 @@ class VisTimeSeries(object):
                 uvw=uvw_t, freq=chan_freq, vis=vis_t, wgt=wgt_t,
                 npix_x=npix_x, npix_y=npix_y,
                 pixsize_x=pixsize_x, pixsize_y=pixsize_y,
-                epsilon=epsilon, nthreads=nthreads,
+                epsilon=epsilon, do_wgridding=do_wgridding, nthreads=nthreads,
                 sigma_min=sigma_min, sigma_max=sigma_max,
                 grid=grid_buf
             )

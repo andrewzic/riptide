@@ -271,6 +271,7 @@ def test_craco_high_dm_1000_1deg_offaxis_streaming():
 
     t_axis = np.arange(nt) * dt
     c_light = 299792458.0
+    nm1 = math.sqrt(max(0.0, 1.0 - dl * dl - dm_coord * dm_coord)) - 1.0
 
     vis_injected = vis_3d.copy()
     for c in range(nchan):
@@ -281,7 +282,8 @@ def test_craco_high_dm_1000_1deg_offaxis_streaming():
         lam_c = c_light / chan_freq[c]
         u_c = uvw_3d[:, 0, :] / lam_c
         v_c = uvw_3d[:, 1, :] / lam_c
-        geom_phase_c = -2.0 * np.pi * (u_c * dl + v_c * dm_coord)
+        w_c = uvw_3d[:, 2, :] / lam_c
+        geom_phase_c = -2.0 * np.pi * (u_c * dl + v_c * dm_coord - w_c * nm1)
 
         vis_injected[:, c, :] += (pulse_c[None, :] * np.exp(1j * geom_phase_c)).astype(np.complex64)
 
@@ -299,6 +301,7 @@ def test_craco_high_dm_1000_1deg_offaxis_streaming():
         pixsize_x=pixsize_x,
         pixsize_y=pixsize_y,
         epsilon=epsilon,
+        do_wgridding=True,
         threshold=1e-4,
         nthreads=nthreads,
         snr_thresh=8.0,
