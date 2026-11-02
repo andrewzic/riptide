@@ -17,3 +17,12 @@ src/riptide/_version.py
 *.egg
 *.py[cod]
 *.egg-info
+core.*
+craco_ffa_search_*
+slurm_ffa_*
+*.fits
+*.png
+*.json
+*.csv
+*.out
+*.err
