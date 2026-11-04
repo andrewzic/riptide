@@ -360,6 +360,9 @@ vis_ffa_transform_basep(
 
     const std::complex<float>* vis_data = static_cast<const std::complex<float>*>(buf.ptr);
 
+    if (downsample_factor < 1.0) {
+        throw std::invalid_argument("vis_ffa_transform_basep: downsample_factor must be >= 1.0");
+    }
     const bool do_downsample = (downsample_factor > 1.0);
     if (do_downsample) {
         riptide::check_downsampling_factor(nsamp, downsample_factor);
@@ -378,10 +381,16 @@ vis_ffa_transform_basep(
     auto out_buf = out_array.request();
     std::complex<float>* out_ptr = static_cast<std::complex<float>*>(out_buf.ptr);
 
-    // Vector for trial periods
-    std::vector<double> periods;
+    // Allocate trial periods NumPy array with owned memory: (actual_rows_eval,)
+    py::array_t<double> periods_array(actual_rows_eval);
+    auto periods_buf = periods_array.request();
+    double* periods_ptr = static_cast<double*>(periods_buf.ptr);
 
-    // Call underlying implementation
+    if (!out_ptr || !periods_ptr) {
+        throw std::runtime_error("vis_ffa_transform_basep: failed to allocate memory buffers.");
+    }
+
+    // Call underlying implementation directly writing into destination buffers
     riptide::vis_ffa_transform_basep(
         vis_data,
         N_uv,
@@ -389,13 +398,10 @@ vis_ffa_transform_basep(
         bins,
         tsamp,
         out_ptr,
-        periods,
+        periods_ptr,
         actual_rows_eval,
         downsample_factor
     );
-
-    // Wrap periods into NumPy array
-    py::array_t<double> periods_array(ssize_t(actual_rows_eval), periods.data());
 
     return std::make_tuple(out_array, periods_array);
 }
@@ -742,7 +748,7 @@ PYBIND11_MODULE(libcpp, m)
         py::arg("tsamp"),
         py::arg("rows_eval") = 0,
         py::arg("downsample_factor") = 1.0,
-        "Compute the FFA transform of a block of visibilities (a DGA) for a single base period. Returns a FFA-transformed DGA"
+        "Compute the FFA transform of a block of visibilities (a DGA) for a single base period. Returns a 2-tuple: (ffa_transformed_dga, trial_periods)"
     );
 
     m.def(

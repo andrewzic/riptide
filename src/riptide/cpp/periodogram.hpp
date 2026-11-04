@@ -357,6 +357,9 @@ inline void vis_ffa_transform(
  * @param out               Output buffer (N_uv * actual_rows_eval * bins). Caller allocates.
  * @param periods_out       Output vector of evaluated trial periods (length actual_rows_eval).
  * @param rows_eval         Number of shift rows to retain (0 means retain all rows = n / bins).
+ * @param out Output buffer of shape (N_uv, actual_rows_eval, bins).
+ * @param periods_out Output buffer for trial periods of length actual_rows_eval.
+ * @param rows_eval Number of shift rows to evaluate (0 means all rows).
  * @param downsample_factor Downsampling factor f >= 1.0 applied before folding.
  */
 inline void vis_ffa_transform_basep(
@@ -366,10 +369,18 @@ inline void vis_ffa_transform_basep(
     size_t bins,
     double tsamp,
     std::complex<float>* __restrict__ out,
-    std::vector<double>& periods_out,
+    double* __restrict__ periods_out,
     size_t rows_eval = 0,
     double downsample_factor = 1.0
 ) {
+    if (!vis_data || !out || !periods_out) {
+        throw std::runtime_error("vis_ffa_transform_basep: null pointer provided for data buffers.");
+    }
+
+    if (downsample_factor < 1.0) {
+        throw std::invalid_argument("vis_ffa_transform_basep: downsample_factor must be >= 1.0");
+    }
+
     const bool do_downsample = (downsample_factor > 1.0);
     const size_t n = do_downsample ? downsampled_size(nsamp, downsample_factor) : nsamp;
 
@@ -381,8 +392,7 @@ inline void vis_ffa_transform_basep(
 
     const size_t actual_rows_eval = (rows_eval > 0 && rows_eval < rows) ? rows_eval : rows;
 
-    // Compute periods vector (same for all uv-cells)
-    periods_out.resize(actual_rows_eval);
+    // Compute trial periods across shift rows: P(s) = tau * bins^2 / (bins - s / (rows - 1.0))
     const double tau = tsamp;
     for (size_t s = 0; s < actual_rows_eval; ++s) {
         periods_out[s] = tau * bins * bins / (bins - s / (rows - 1.0));
@@ -410,6 +420,30 @@ inline void vis_ffa_transform_basep(
         std::complex<float>* out_ptr = out + iuv * actual_rows_eval * bins;
         std::copy(ffaout.begin(), ffaout.begin() + (actual_rows_eval * bins), out_ptr);
     }
+}
+
+inline void vis_ffa_transform_basep(
+    const std::complex<float>* __restrict__ vis_data,
+    size_t N_uv,
+    size_t nsamp,
+    size_t bins,
+    double tsamp,
+    std::complex<float>* __restrict__ out,
+    std::vector<double>& periods_out,
+    size_t rows_eval = 0,
+    double downsample_factor = 1.0
+) {
+    const bool do_downsample = (downsample_factor > 1.0);
+    const size_t n = do_downsample ? downsampled_size(nsamp, downsample_factor) : nsamp;
+    const size_t rows = n / bins;
+    if (rows < 2) {
+        throw std::runtime_error("vis_ffa_transform_basep: not enough rows for given bins.");
+    }
+    const size_t actual_rows_eval = (rows_eval > 0 && rows_eval < rows) ? rows_eval : rows;
+    periods_out.resize(actual_rows_eval);
+    vis_ffa_transform_basep(
+        vis_data, N_uv, nsamp, bins, tsamp, out, periods_out.data(), rows_eval, downsample_factor
+    );
 }
 
 } // namespace riptide

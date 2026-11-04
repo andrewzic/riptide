@@ -122,7 +122,7 @@ def vis_ffa_search_basep(
     ffa_result : UV_FFA_basep
         The output of the search, which contains the 3D array of folded visibilities
     """
-    ffa_grid_array, _ = libcpp.vis_ffa_transform_basep(
+    ffa_grid_array, periods = libcpp.vis_ffa_transform_basep(
         dynamic_grid_array,
         base_period,
         tsamp,
@@ -130,14 +130,7 @@ def vis_ffa_search_basep(
         float(downsample_factor)
     )
 
-    # Compute exact trial period corresponding to each row of the FFA transform
-    nsamp = dynamic_grid_array.shape[1]
-    n = int(nsamp / downsample_factor) if downsample_factor > 1.0 else nsamp
-    rows = n // base_period
     actual_rows_eval = ffa_grid_array.shape[1]
-    s_shifts = np.arange(actual_rows_eval, dtype=np.float64)
-    periods = (tsamp * base_period * base_period) / (base_period - s_shifts / (rows - 1.0))
-
     foldbins = np.full(actual_rows_eval, base_period, dtype=np.int64)
 
     ffa_result = UV_FFA_basep(uv_inds, periods, foldbins, base_period, tsamp, ffa_grid_array)
