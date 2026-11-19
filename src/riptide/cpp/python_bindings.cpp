@@ -19,6 +19,46 @@
 #include "running_median.hpp"
 #include "image_ffa.hpp"
 
+#ifdef HAVE_CUDA
+namespace riptide {
+bool cu_has_cuda();
+void cu_csr_to_uniform_dga_scatter(
+    const uint64_t* cell_offsets,
+    const std::complex<float>* vis_data,
+    const double* vis_times,
+    size_t M,
+    size_t nnz,
+    size_t nsamp,
+    double dt,
+    double t0,
+    std::complex<float>* dga_out
+);
+void cu_vis_ffa_transform_basep_device(
+    const std::complex<float>* d_vis_data,
+    size_t N_uv,
+    size_t nsamp,
+    size_t bins,
+    double tsamp,
+    std::complex<float>* d_out,
+    double* d_periods_out,
+    size_t rows_eval = 0,
+    double downsample_factor = 1.0,
+    void* stream = nullptr
+);
+void cu_vis_ffa_transform_basep_host(
+    const std::complex<float>* vis_data,
+    size_t N_uv,
+    size_t nsamp,
+    size_t bins,
+    double tsamp,
+    std::complex<float>* out,
+    double* periods_out,
+    size_t rows_eval = 0,
+    double downsample_factor = 1.0
+);
+} // namespace riptide
+#endif
+
 
 namespace py = pybind11;
 
@@ -682,6 +722,139 @@ py::array_t<float> running_median(py::array_t<float> arr_x, size_t width)
 }
 
 
+bool has_cuda()
+{
+#ifdef HAVE_CUDA
+    return riptide::cu_has_cuda();
+#else
+    return false;
+#endif
+}
+
+#ifdef HAVE_CUDA
+py::array_t<std::complex<float>> cu_csr_to_uniform_dga_scatter(
+    py::array_t<uint64_t> arr_cell_offsets,
+    py::array_t<std::complex<float>> arr_vis_data,
+    py::array_t<double> arr_vis_times,
+    size_t nsamp,
+    double dt,
+    double t0 = 0.0
+) {
+    assert_c_contiguous(arr_cell_offsets);
+    assert_c_contiguous(arr_vis_data);
+    assert_c_contiguous(arr_vis_times);
+
+    auto off_buf = arr_cell_offsets.request();
+    auto vis_buf = arr_vis_data.request();
+    auto t_buf = arr_vis_times.request();
+
+    if (off_buf.ndim != 1 || off_buf.shape[0] < 1) {
+        throw std::invalid_argument(
+            "cu_csr_to_uniform_dga_scatter: cell_offsets must be 1D with length M + 1 >= 1"
+        );
+    }
+    if (vis_buf.ndim != 1 || t_buf.ndim != 1 || vis_buf.shape[0] != t_buf.shape[0]) {
+        throw std::invalid_argument(
+            "cu_csr_to_uniform_dga_scatter: vis_data and vis_times must be 1D arrays of equal length"
+        );
+    }
+
+    const size_t M = static_cast<size_t>(off_buf.shape[0] - 1);
+    const size_t nnz = static_cast<size_t>(vis_buf.shape[0]);
+
+    auto out_array = new_cstyle_array<std::complex<float>>({M, nsamp});
+    riptide::cu_csr_to_uniform_dga_scatter(
+        static_cast<const uint64_t*>(off_buf.ptr),
+        static_cast<const std::complex<float>*>(vis_buf.ptr),
+        static_cast<const double*>(t_buf.ptr),
+        M,
+        nnz,
+        nsamp,
+        dt,
+        t0,
+        out_array.mutable_data()
+    );
+    return out_array;
+}
+
+std::tuple<py::array_t<std::complex<float>>, py::array_t<double>>
+cu_vis_ffa_transform_basep_host_py(
+    py::array_t<std::complex<float>> arr_vis_data,
+    size_t bins,
+    double tsamp,
+    size_t rows_eval = 0,
+    double downsample_factor = 1.0
+) {
+    assert_c_contiguous(arr_vis_data);
+    auto buf = arr_vis_data.request();
+    if (buf.ndim != 2) {
+        throw std::runtime_error("cu_vis_ffa_transform_basep: input must be 2D (N_uv, nsamp)");
+    }
+    const size_t N_uv = static_cast<size_t>(buf.shape[0]);
+    const size_t nsamp = static_cast<size_t>(buf.shape[1]);
+
+    if (bins == 0) {
+        throw std::invalid_argument("cu_vis_ffa_transform_basep: bins must be >= 1");
+    }
+    if (downsample_factor < 1.0) {
+        throw std::invalid_argument("cu_vis_ffa_transform_basep: downsample_factor must be >= 1.0");
+    }
+    const bool do_downsample = (downsample_factor > 1.0);
+    if (do_downsample) {
+        riptide::check_downsampling_factor(nsamp, downsample_factor);
+    }
+    const size_t n = do_downsample ? riptide::downsampled_size(nsamp, downsample_factor) : nsamp;
+    const size_t rows = n / bins;
+    if (rows < 2) {
+        throw std::runtime_error("cu_vis_ffa_transform_basep: too few rows.");
+    }
+    const size_t actual_rows_eval = (rows_eval > 0 && rows_eval < rows) ? rows_eval : rows;
+
+    auto out_array = new_cstyle_array<std::complex<float>>({N_uv, actual_rows_eval, bins});
+    auto periods_array = new_cstyle_array<double>({actual_rows_eval});
+
+    riptide::cu_vis_ffa_transform_basep_host(
+        static_cast<const std::complex<float>*>(buf.ptr),
+        N_uv,
+        nsamp,
+        bins,
+        tsamp,
+        out_array.mutable_data(),
+        periods_array.mutable_data(),
+        actual_rows_eval,
+        downsample_factor
+    );
+    return std::make_tuple(out_array, periods_array);
+}
+
+void cu_vis_ffa_transform_basep_device_py(
+    std::uintptr_t d_vis_ptr,
+    size_t N_uv,
+    size_t nsamp,
+    size_t bins,
+    double tsamp,
+    std::uintptr_t d_out_ptr,
+    std::uintptr_t d_periods_ptr,
+    size_t rows_eval = 0,
+    double downsample_factor = 1.0,
+    std::uintptr_t stream_ptr = 0
+) {
+    riptide::cu_vis_ffa_transform_basep_device(
+        reinterpret_cast<const std::complex<float>*>(d_vis_ptr),
+        N_uv,
+        nsamp,
+        bins,
+        tsamp,
+        reinterpret_cast<std::complex<float>*>(d_out_ptr),
+        reinterpret_cast<double*>(d_periods_ptr),
+        rows_eval,
+        downsample_factor,
+        reinterpret_cast<void*>(stream_ptr)
+    );
+}
+#endif
+
+
 PYBIND11_MODULE(libcpp, m)
 {
     m.def(
@@ -800,5 +973,52 @@ PYBIND11_MODULE(libcpp, m)
         "The data must be contiguous in memory, and width must be an odd number smaller than the input length.\n"
         "Throws std::invalid argument if any of the above conditions are not met."
     );
+
+    m.def(
+        "has_cuda", &has_cuda,
+        "Return True if CUDA support was compiled into libcpp and at least one CUDA device is accessible."
+    );
+
+#ifdef HAVE_CUDA
+    m.attr("HAS_CUDA") = true;
+
+    m.def(
+        "cu_csr_to_uniform_dga_scatter", &cu_csr_to_uniform_dga_scatter,
+        py::arg("cell_offsets"),
+        py::arg("vis_data"),
+        py::arg("vis_times"),
+        py::arg("nsamp"),
+        py::arg("dt"),
+        py::arg("t0") = 0.0,
+        "Scatter CSR visibility samples onto a uniform (M, nsamp) complex64 DGA grid on CUDA."
+    );
+
+    m.def(
+        "cu_vis_ffa_transform_basep", &cu_vis_ffa_transform_basep_host_py,
+        py::arg("vis_data"),
+        py::arg("bins"),
+        py::arg("tsamp"),
+        py::arg("rows_eval") = 0,
+        py::arg("downsample_factor") = 1.0,
+        "Compute the CUDA FFA transform of a 2D complex64 visibility block for a single base period."
+    );
+
+    m.def(
+        "cu_vis_ffa_transform_basep", &cu_vis_ffa_transform_basep_device_py,
+        py::arg("d_vis_ptr"),
+        py::arg("N_uv"),
+        py::arg("nsamp"),
+        py::arg("bins"),
+        py::arg("tsamp"),
+        py::arg("d_out_ptr"),
+        py::arg("d_periods_ptr"),
+        py::arg("rows_eval") = 0,
+        py::arg("downsample_factor") = 1.0,
+        py::arg("stream_ptr") = 0,
+        "Compute the CUDA FFA transform directly on device pointers."
+    );
+#else
+    m.attr("HAS_CUDA") = false;
+#endif
 
 } // PYBIND11_MODULE

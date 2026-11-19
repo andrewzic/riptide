@@ -1,3 +1,4 @@
+import logging
 import numpy as np
 
 ### Local module imports
@@ -5,6 +6,8 @@ import riptide.libcpp as libcpp
 from .ffautils import generate_width_trials
 from .periodogram import Periodogram, UV_FFA, UV_FFA_basep
 from .timing import timing
+
+logger = logging.getLogger(__name__)
 
 @timing
 def vis_ffa_search(
@@ -101,7 +104,9 @@ def vis_ffa_search_basep(
     uv_inds,
     tsamp,
     rows_eval=0,
-    downsample_factor=1.0
+    downsample_factor=1.0,
+    device="cpu",
+    return_device=False,
 ):  
     """
     Run a FFA search of a multiple visibility timeseries to produce ffa blocks for a given base period
@@ -116,19 +121,100 @@ def vis_ffa_search_basep(
         Number of shift rows to evaluate (0 means all rows)
     downsample_factor : float, optional
         Downsampling factor (>= 1.0) to apply before folding
+    device : str, optional
+        Execution backend: ``"cpu"`` (default), ``"cuda"``, or ``"auto"``.
+    return_device : bool, optional
+        If True, retain the folded ``ffa_array`` on GPU as a CuPy array.
 
     Returns
     -------
     ffa_result : UV_FFA_basep
         The output of the search, which contains the 3D array of folded visibilities
     """
-    ffa_grid_array, periods = libcpp.vis_ffa_transform_basep(
-        dynamic_grid_array,
-        base_period,
-        tsamp,
-        int(rows_eval),
-        float(downsample_factor)
-    )
+    dev = str(device).lower()
+    if dev not in ("cpu", "cuda", "auto"):
+        raise ValueError(f"Unsupported device='{device}'; expected 'cpu', 'cuda', or 'auto'.")
+
+    is_device_input = hasattr(dynamic_grid_array, "__cuda_array_interface__")
+
+    if dev == "cpu":
+        if return_device:
+            raise ValueError("return_device=True requires device='cuda' or device='auto' with CUDA.")
+        if is_device_input:
+            raise TypeError(
+                "device='cpu' cannot accept a CUDA device array; pass a host NumPy array or use device='cuda'."
+            )
+        ffa_grid_array, periods = libcpp.vis_ffa_transform_basep(
+            dynamic_grid_array,
+            base_period,
+            tsamp,
+            int(rows_eval),
+            float(downsample_factor)
+        )
+    else:
+        has_libcpp_cuda = bool(getattr(libcpp, "has_cuda", lambda: False)())
+        cuda_ffa_mod = None
+        has_cupy_cuda = False
+        try:
+            from . import cuda_ffa as cuda_ffa_mod
+            has_cupy_cuda = bool(cuda_ffa_mod.is_cuda_available())
+        except ImportError as exc:
+            logger.debug("riptide.cuda_ffa import failed; CuPy backend unavailable: %s", exc)
+            cuda_ffa_mod = None
+            has_cupy_cuda = False
+
+        if dev == "cuda":
+            if return_device and not has_cupy_cuda:
+                raise RuntimeError(
+                    "device='cuda' with return_device=True requires CuPy and an accessible CUDA device."
+                )
+            if is_device_input and not has_cupy_cuda:
+                raise RuntimeError(
+                    "CUDA device array input requires CuPy and an accessible CUDA device."
+                )
+            if not (has_cupy_cuda or has_libcpp_cuda):
+                raise RuntimeError(
+                    "device='cuda' requested, but neither CuPy CUDA nor compiled libcpp CUDA support is available."
+                )
+            use_gpu = True
+        else:
+            if return_device and not has_cupy_cuda:
+                raise RuntimeError(
+                    "return_device=True with device='auto' requires CuPy and an accessible CUDA device."
+                )
+            if is_device_input and not has_cupy_cuda:
+                raise RuntimeError(
+                    "CUDA device array input requires CuPy and an accessible CUDA device."
+                )
+            use_gpu = has_cupy_cuda or has_libcpp_cuda
+
+        if use_gpu:
+            if has_cupy_cuda:
+                ffa_grid_array, periods = cuda_ffa_mod.cu_vis_ffa_transform_basep_gpu(
+                    dynamic_grid_array,
+                    int(base_period),
+                    float(tsamp),
+                    rows_eval=int(rows_eval),
+                    downsample_factor=float(downsample_factor),
+                    return_device=bool(return_device),
+                )
+            else:
+                ffa_grid_array, periods = libcpp.cu_vis_ffa_transform_basep(
+                    dynamic_grid_array,
+                    int(base_period),
+                    float(tsamp),
+                    int(rows_eval),
+                    float(downsample_factor),
+                )
+        else:
+            logger.debug("vis_ffa_search_basep(device='auto') falling back to CPU: no CUDA backend available.")
+            ffa_grid_array, periods = libcpp.vis_ffa_transform_basep(
+                dynamic_grid_array,
+                base_period,
+                tsamp,
+                int(rows_eval),
+                float(downsample_factor)
+            )
 
     actual_rows_eval = ffa_grid_array.shape[1]
     foldbins = np.full(actual_rows_eval, base_period, dtype=np.int64)

@@ -1,7 +1,9 @@
 import os
 import sys
 import glob
+import shutil
 import platform
+import subprocess
 from setuptools import setup
 from pybind11.setup_helpers import Pybind11Extension, build_ext
 
@@ -108,10 +110,80 @@ for d in common_libs:
 include_dirs = list(dict.fromkeys(include_dirs))
 library_dirs = list(dict.fromkeys(library_dirs))
 
+# Conditional CUDA compilation when nvcc is available and not opted out
+disable_cuda = os.environ.get("RIPTIDE_NO_CUDA", "").strip().lower() in ("1", "true", "yes", "on")
+nvcc_path = None if disable_cuda else shutil.which("nvcc")
+if not disable_cuda and nvcc_path is None:
+    cuda_home = os.environ.get("CUDA_HOME") or os.environ.get("CUDA_PATH")
+    if cuda_home:
+        cand_nvcc = os.path.join(cuda_home, "bin", "nvcc")
+        if os.path.isfile(cand_nvcc) and os.access(cand_nvcc, os.X_OK):
+            nvcc_path = cand_nvcc
+
+cuda_source = os.path.join("src", "riptide", "cpp", "cuda_transforms.cu")
+use_cuda = (nvcc_path is not None) and os.path.isfile(cuda_source)
+define_macros = []
+
+if use_cuda:
+    define_macros.append(("HAVE_CUDA", "1"))
+    cuda_roots = []
+    for env_key in ("CUDA_HOME", "CUDA_PATH"):
+        val = os.environ.get(env_key)
+        if val:
+            cuda_roots.append(val)
+    cuda_roots.append(os.path.dirname(os.path.dirname(nvcc_path)))
+    cuda_roots.append(os.path.dirname(os.path.dirname(os.path.realpath(nvcc_path))))
+    for root in cuda_roots:
+        for sub in ("lib64", "lib"):
+            cand_lib = os.path.join(root, sub)
+            if os.path.isdir(cand_lib):
+                library_dirs.append(cand_lib)
+                extra_link_args.append(f"-Wl,-rpath,{cand_lib}")
+    library_dirs = list(dict.fromkeys(library_dirs))
+    extra_link_args = list(dict.fromkeys(extra_link_args))
+    libraries.append("cudart")
+
+
+class CudaBuildExt(build_ext):
+    """Build extension subclass compiling ``cuda_transforms.cu`` with ``nvcc`` when enabled."""
+
+    def build_extensions(self):
+        if use_cuda:
+            os.makedirs(self.build_temp, exist_ok=True)
+            cuda_obj = os.path.join(self.build_temp, "cuda_transforms.o")
+            nvcc_cmd = [
+                nvcc_path,
+                "-c",
+                cuda_source,
+                "-o",
+                cuda_obj,
+                "-std=c++17",
+                "-O3",
+                "-Xcompiler",
+                "-fPIC",
+                "-gencode",
+                "arch=compute_70,code=sm_70",
+                "-gencode",
+                "arch=compute_80,code=sm_80",
+                "-gencode",
+                "arch=compute_80,code=compute_80",
+            ]
+            print(f"[setup.py] Compiling CUDA kernel object: {' '.join(nvcc_cmd)}")
+            subprocess.check_call(nvcc_cmd)
+            for ext in self.extensions:
+                if ext.name == "riptide.libcpp":
+                    objs = list(ext.extra_objects or [])
+                    if cuda_obj not in objs:
+                        objs.append(cuda_obj)
+                    ext.extra_objects = objs
+        super().build_extensions()
+
+
 ext_modules = [
     Pybind11Extension(
         "riptide.libcpp",
         sorted(cpp_sources),
+        define_macros=define_macros,
         extra_compile_args=extra_compile_args,
         include_dirs=include_dirs,
         library_dirs=library_dirs,
@@ -124,5 +196,5 @@ ext_modules = [
 if __name__ == "__main__":
     setup(
         ext_modules=ext_modules,
-        cmdclass={"build_ext": build_ext},
+        cmdclass={"build_ext": CudaBuildExt},
     )
